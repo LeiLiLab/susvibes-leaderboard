@@ -1,6 +1,4 @@
-# τ²-bench Web Interface
-
-![τ²-bench Leaderboard](public/leaderboard.png)
+# SusVibes Leaderboard Web Interface
 
 ## 🚀 Quick Start
 
@@ -13,7 +11,7 @@
 
 1. **Navigate to the leaderboard directory**
    ```bash
-   cd web/leaderboard
+   cd susvibes-leaderboard
    ```
 
 2. **Install dependencies**
@@ -45,6 +43,7 @@ We welcome community submissions! The leaderboard now accepts model evaluation r
 ```json
 {
   "model_name": "My-Model-v1.0",
+  "agent_framework": "My-Agent-Framework",
   "model_organization": "My Organization",
   "submitting_organization": "My Organization",
   "submission_date": "2025-01-15",
@@ -66,14 +65,16 @@ We welcome community submissions! The leaderboard now accepts model evaluation r
     }
   ],
   "results": {
-    "retail": {"pass_1": 75.2, "pass_2": 68.1, "pass_3": null, "pass_4": null},
-    "airline": {"pass_1": 61.2, "pass_2": null, "pass_3": null, "pass_4": null},
-    "telecom": {"pass_1": 45.6, "pass_2": null, "pass_3": null, "pass_4": null}
+    "python": {
+      "func_pass_1": 50.0,
+      "sec_pass_1": 10.0,
+      "cost": 0.025
+    }
   },
   "methodology": {
     "evaluation_date": "2025-01-10",
-    "tau2_bench_version": "v1.0",
-    "user_simulator": "gpt-4.1-2025-04-14",
+    "susvibes_version": "v1.0",
+    "agent_framework": "My-Agent-Framework",
     "verification": {
       "modified_prompts": false,
       "omitted_questions": true,
