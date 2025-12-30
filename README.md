@@ -127,3 +127,9 @@ public/
 ├── trajectory-data/    # Model execution trajectories
 └── *.png, *.svg       # Public assets
 ```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+This is a modified version of [tau2-bench](https://github.com/sierra-research/tau2-bench) by [Sierra Research](https://github.com/sierra-research).
