@@ -43,7 +43,7 @@ Example methodology section for a custom submission:
 {
   "submission_type": "custom",
   "methodology": {
-    "evaluation_date": "2025-01-15",
+    "evaluation_date": "2025-12-29",
     "susvibes_version": "0.2.0",
     "notes": "This submission uses a multi-model router that selects between GPT-4 and Claude based on task complexity. We also added a custom reflection step after each tool call. See our GitHub repo for full implementation details.",
     "verification": {
@@ -89,7 +89,7 @@ If you omitted any tasks from your evaluation runs:
 
 ### Step 3: Create Your Submission Directory
 1. Navigate to the `public/submissions/` directory
-2. Create a new directory following the naming convention: `{model-name}_{agent-framework}_{model_organization}_{date}`
+2. Create a new directory following the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}`
 3. Inside your submission directory, create:
    - `submission.json` - Your submission metadata (using schema defined in `public/submissions/schema.json`)
    - `trajectories/` directory - For your trajectory files
@@ -98,16 +98,16 @@ If you omitted any tasks from your evaluation runs:
 
 Example directory structure:
 ```
-public/submissions/my-awesome-model_mycompany_2025-01-15/
+public/submissions/my-awesome-model_agent-framework_standard_2025-12-29/
 ├── submission.json
 └── trajectories/
-    ├── my-awesome-model_agent-framework_mycompany_2025-01-15.trials.json
-    ├── my-awesome-model_agent-framework_mycompany_2025-01-15.summary.json
+    ├── my-awesome-model_agent-framework_standard_2025-12-29.trials.json
+    └── my-awesome-model_agent-framework_standard_2025-12-29.summary.json
 ```
 
 ### Step 4: Add Your Trajectory Files
 1. Copy your trajectory files from `data/tau2/simulations/` to your submission's `trajectories/` directory
-2. Follow the naming convention: `{model-name}_{domain}_{mode}_{user-llm}_{num-trials}trials.json`
+2. Follow the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}.trials.json` and `{model-name}_{agent-framework}_{submission-type}_{date}.summary.json`
 3. Add trajectory files for all domains you evaluated
 
 ### Step 5: Update the Manifest
@@ -116,11 +116,11 @@ Add your directory name to the `submissions` array in `public/submissions/manife
 ```json
 {
   "submissions": [
-    "existing-submission-1_org_2024-12-01",
-    "existing-submission-2_org_2024-12-15", 
-    "my-awesome-model_mycompany_2025-01-15"
+    "existing-submission-1_framework_standard_2024-12-01",
+    "existing-submission-2_framework_standard_2024-12-15",
+    "my-awesome-model_agent-framework_standard_2025-12-29"
   ],
-  "last_updated": "2025-01-15T12:00:00Z"
+  "last_updated": "2025-12-29T12:00:00Z"
 }
 ```
 
@@ -170,31 +170,22 @@ public/submissions/
 ├── README.md                           # Contributor guidelines
 ├── schema.json                         # JSON schema definition
 ├── manifest.json                       # List of active submissions
-├── model1_org1_date/                   # Individual submission directory
+├── model1_framework1_standard_date/    # Individual submission directory
 │   ├── submission.json                 # Submission metadata
 │   └── trajectories/                   # Trajectory files for this submission
-│       ├── model1_agent-framework_org1_2025-01-15.trials.json
-│       └── model1_agent-framework_org1_2025-01-15.summary.json
-├── model2_org2_date/                   # Another submission
+│       ├── model1_framework1_standard_2025-12-29.trials.json
+│       └── model1_framework1_standard_2025-12-29.summary.json
+├── model2_framework2_custom_date/      # Another submission
 │   ├── submission.json
 │   └── trajectories/
-│       ├── model2_agent-framework_org2_2025-01-15.trials.json
-│       └── model2_agent-framework_org2_2025-01-15.summary.json
+│       ├── model2_framework2_custom_2025-12-29.trials.json
+│       └── model2_framework2_custom_2025-12-29.summary.json
 └── ...
 ```
 
 ## Example Submission
 
-See the directory `public/submissions/EXAMPLE_new-model_example-org_2025-01-15/` for a complete example of what a submission should look like.
-
-### Example Directory Structure
-```
-public/submissions/my-awesome-model_mycompany_2025-01-15/
-├── submission.json
-└── trajectories/
-    ├── my-awesome-model_agent-framework_mycompany_2025-01-15.trials.json
-    └── my-awesome-model_agent-framework_mycompany_2025-01-15.summary.json
-```
+See the directory `public/submissions/A_EXAMPLE_new-model_new-framework_standard_2025-12-29/` for a complete example of what a submission should look like.
 
 ### Upload Instructions
 1. Copy trajectory files from your SusVibes output directory
