@@ -106,9 +106,10 @@ public/submissions/my-awesome-model_agent-framework_standard_2025-12-29/
 ```
 
 ### Step 4: Add Your Trajectory Files
-1. Copy your trajectory files from `data/tau2/simulations/` to your submission's `trajectories/` directory
-2. Follow the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}.trials.json` and `{model-name}_{agent-framework}_{submission-type}_{date}.summary.json`
-3. Add trajectory files for all domains you evaluated
+1. Copy your evaluation summary file from SusVibes scaffold to your submission's `trajectories/` directory
+2. Follow the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}.summary.json`
+3. Add your agent trajectories for what you've evaluated. A detailed specification of required trajectory format can be found at `public/submissions/A_EXAMPLE_new-model_new-framework_standard_2025-12-29/trajectories`. 
+4. Follow the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}.trials.json` 
 
 ### Step 5: Update the Manifest
 Add your directory name to the `submissions` array in `public/submissions/manifest.json`:
@@ -188,7 +189,7 @@ public/submissions/
 See the directory `public/submissions/A_EXAMPLE_new-model_new-framework_standard_2025-12-29/` for a complete example of what a submission should look like.
 
 ### Upload Instructions
-1. Copy trajectory files from your SusVibes output directory
+1. Copy trajectory files from your directory
 2. Rename them following the convention above if needed
 3. Add them to your submission's `trajectories/` directory in your pull request
 4. Do not compress or archive the files - upload the raw JSON files
