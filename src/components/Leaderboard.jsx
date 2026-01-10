@@ -675,10 +675,16 @@ const Leaderboard = () => {
           </div>
         </div>
 
-        {/* Domain Display (Python only for SusVibes) */}
-        <div className="domain-display">
-          <div className="domain-badge">
-            🐍 Python
+        {/* Domain Toggle */}
+        <div className="view-toggle-switch">
+          <div className="toggle-container">
+            <button className="toggle-option active">
+              🐍 Python
+            </button>
+            <div
+              className="toggle-slider single"
+              style={{ transform: 'translateX(0%)' }}
+            />
           </div>
         </div>
 
