@@ -133,3 +133,7 @@ public/
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 This is a modified version of [tau2-bench](https://github.com/sierra-research/tau2-bench) by [Sierra Research](https://github.com/sierra-research).
+
+## Acknowledgments
+
+We thank the open-source community for providing the diverse codebases used in our benchmark tasks. We also thank the [Sierra Research](https://github.com/sierra-research) for their work on [tau2-bench](https://github.com/sierra-research/tau2-bench).

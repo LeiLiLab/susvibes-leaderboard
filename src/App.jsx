@@ -221,12 +221,12 @@ function App() {
         <div className="container">
           <p>
             For questions or feedback, contact{' '}
-            <a href="mailto:victor@sierra.ai" className="footer-email">
-              victor@sierra.ai
+            <a href="mailto:sz3296@columbia.edu" className="footer-email">
+            sz3296@columbia.edu
             </a>
             {' '}or{' '}
-            <a href="mailto:ben.s@sierra.ai" className="footer-email">
-              ben.s@sierra.ai
+            <a href="mailto:danqingw@cs.cmu.edu" className="footer-email">
+            danqingw@cs.cmu.edu
             </a>
           </p>
         </div>
