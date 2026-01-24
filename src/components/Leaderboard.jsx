@@ -190,8 +190,8 @@ const Leaderboard = () => {
           const size = 8
           
           ctx.clearRect(0, 0, 16, 16)
-          ctx.fillStyle = '#4878d0'
-          ctx.strokeStyle = '#4878d0'
+          ctx.fillStyle = '#C41230'
+          ctx.strokeStyle = '#C41230'
           ctx.lineWidth = 2
           
           // Draw point based on style
@@ -522,7 +522,7 @@ const Leaderboard = () => {
             backgroundColor: 'rgba(0, 0, 0, 0.8)',
             titleColor: 'white',
             bodyColor: 'white',
-            borderColor: '#4878d0',
+            borderColor: '#C41230',
             borderWidth: 1,
             callbacks: {
               label: function(context) {
