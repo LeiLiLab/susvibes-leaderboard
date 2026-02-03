@@ -231,7 +231,7 @@ const TrajectoryVisualizer = () => {
 
   // Available domains for task exploration
   const domains = [
-    { name: 'Python', id: 'python', color: '#3b82f6' }
+    { name: 'Python', id: 'python', color: '#e2e8f0' }
   ]
 
   // Load dataset information
@@ -370,10 +370,11 @@ const TrajectoryVisualizer = () => {
             const message = event.message || {}
             const role = message.role || event.type
             
-            // Extract content from message
+            // Extract content from message (excluding tool_use which is handled separately)
             let content = ''
             if (Array.isArray(message.content)) {
               content = message.content
+                .filter(c => c.type !== 'tool_use') // Exclude tool_use, handled separately as tool_calls
                 .map(c => {
                   if (typeof c === 'string') return c
                   if (c.type === 'text') return c.text || ''
@@ -459,23 +460,53 @@ const TrajectoryVisualizer = () => {
       setError(null)
       
       // Construct the path based on submission directory and file
-      const filePath = `${import.meta.env.BASE_URL}submissions/${trajectoryInfo.submissionDir}/trajectories/${trajectoryInfo.file}`
-      
+      const basePath = `${import.meta.env.BASE_URL}submissions/${trajectoryInfo.submissionDir}/trajectories`
+      const filePath = `${basePath}/${trajectoryInfo.file}`
+
       // Construct summary file path (replace .trials.json with .summary.json)
       const summaryFilePath = filePath.replace('.trials.json', '.summary.json')
-      
+
       // Fetch both trajectory and summary files
       const [trajectoryResponse, summaryResponse] = await Promise.all([
         fetch(filePath),
         fetch(summaryFilePath).catch(() => null) // Don't fail if summary doesn't exist
       ])
-      
+
       if (!trajectoryResponse.ok) {
         throw new Error(`Failed to load trajectory data: ${trajectoryResponse.statusText}`)
       }
-      
-      const rawData = await trajectoryResponse.json()
-      
+
+      let rawData = await trajectoryResponse.json()
+
+      // Check if trajectory data is stored in separate files (new format)
+      // In new format, each item's trajectory field is a path string instead of an array
+      if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0].trajectory === 'string') {
+        // Load trajectory data from separate files
+        const loadedData = await Promise.all(
+          rawData.map(async (item) => {
+            if (typeof item.trajectory === 'string') {
+              try {
+                // trajectory is a relative path
+                const trajectoryFilePath = `${basePath}/${item.trajectory}`
+                const response = await fetch(trajectoryFilePath)
+                if (response.ok) {
+                  const trajectoryData = await response.json()
+                  return { ...item, trajectory: trajectoryData }
+                } else {
+                  console.warn(`Failed to load trajectory file: ${item.trajectory}`)
+                  return { ...item, trajectory: [] }
+                }
+              } catch (err) {
+                console.warn(`Error loading trajectory file ${item.trajectory}:`, err)
+                return { ...item, trajectory: [] }
+              }
+            }
+            return item
+          })
+        )
+        rawData = loadedData
+      }
+
       // Load summary data if available
       let summaryData = null
       if (summaryResponse && summaryResponse.ok) {
@@ -627,10 +658,12 @@ const TrajectoryVisualizer = () => {
   const getDomainColor = (domain) => {
     const colors = {
       airline: '#3b82f6',
-      telecom: '#059669', 
-      retail: '#8b5cf6'
+      telecom: '#059669',
+      retail: '#8b5cf6',
+      python: '#e2e8f0',
+      Python: '#e2e8f0'
     }
-    return colors[domain] || '#6b7280'
+    return colors[domain] || '#e2e8f0'
   }
 
   return (
@@ -666,6 +699,9 @@ const TrajectoryVisualizer = () => {
                 setSelectedTrajectory(null)
                 setSelectedTask(null)
                 setSelectedFile(null)
+                setSelectedDomain(null)
+                setTaskData(null)
+                setSelectedTaskDetail(null)
               }}
             >
               📋 Tasks
@@ -731,18 +767,19 @@ const TrajectoryVisualizer = () => {
                   </>
                 ) : (
                   <>
-                    <button 
+                    <button
                       className="back-button"
                       onClick={() => {
                         setSelectedSubmission(null)
                         setAvailableTrajectories([])
                         setSelectedTrajectory(null)
                         setSelectedTask(null)
+                        setSelectedFile(null)
                       }}
                     >
                       ← Back to Submissions
                     </button>
-                    
+
                     <h3>{createAgentName(selectedSubmission.methodology?.agent_framework, selectedSubmission.model_name)} Trajectories</h3>
                     <p className="selection-description">
                       {availableTrajectories.length > 0 
@@ -1088,14 +1125,11 @@ const TrajectoryVisualizer = () => {
                         <span className="message-tokens">{message.tokens} tokens</span>
                       </div>
                       
-                      {(message.tool_calls)
-                        ? null
-                        : (
-                          <div className="message-content">
-                            {message.content}
-                          </div>
-                        )
-                      }
+                      {message.content && (
+                        <div className="message-content">
+                          {message.content}
+                        </div>
+                      )}
 
                       {message.tool_calls && (
                         <div className="message-tools">
