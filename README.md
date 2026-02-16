@@ -1,5 +1,7 @@
 # SusVibes Leaderboard Web Interface
 
+**Live site:** https://leililab.github.io/susvibes-leaderboard/
+
 ## 🚀 Quick Start
 
 ### Prerequisites
