@@ -30,6 +30,10 @@ const TrajectoryVisualizer = () => {
   const [showConfigModal, setShowConfigModal] = useState(false)
   const [modalClosing, setModalClosing] = useState(false)
   
+  // State for simulation grid pagination
+  const [simulationsPerPage, setSimulationsPerPage] = useState(50)
+  const [simulationPage, setSimulationPage] = useState(1)
+
   // State for message pagination
   const [messagesPerPage, setMessagesPerPage] = useState(50)
   const [currentPage, setCurrentPage] = useState(1)
@@ -526,6 +530,7 @@ const TrajectoryVisualizer = () => {
       setSelectedTrajectory(transformedData)
       setSelectedTask(null)
       setSelectedFile(trajectoryInfo.file)
+      setSimulationPage(1)
       
     } catch (err) {
       setError(`Error loading trajectory: ${err.message}`)
@@ -657,7 +662,7 @@ const TrajectoryVisualizer = () => {
 
   const getDomainColor = (domain) => {
     const colors = {
-      airline: '#3b82f6',
+      airline: '#C41230',
       telecom: '#059669',
       retail: '#8b5cf6',
       python: '#e2e8f0',
@@ -905,42 +910,143 @@ const TrajectoryVisualizer = () => {
                 <p>This trajectory contains {selectedTrajectory.simulations?.length || 0} simulations across {selectedTrajectory.tasks?.length || 0} tasks. Select a simulation to view the conversation:</p>
                 
                 <div className="task-grid">
-                  {selectedTrajectory.simulations?.slice(0, 50).map((simulation, index) => {
-                    const task = selectedTrajectory.tasks?.find(t => t.id === simulation.task_id) || {}
-                    const domain = task.user_scenario?.instructions?.domain || 'Unknown'
-                    
-                    return (
-                      <div 
-                        key={simulation.id || index}
-                        className="task-card"
-                        onClick={() => {
-                          setSelectedTask(simulation)
-                          setCurrentPage(1) // Reset pagination when selecting a new task
-                        }}
-                      >
-                        <div className="task-header">
-                          <span className="task-id">Task {getCleanTaskId(simulation.task_id)} - Trial {simulation.trial}</span>
-                          <span className="task-domain" data-domain={domain}>{domain}</span>
+                  {(() => {
+                    const allSimulations = selectedTrajectory.simulations || []
+                    const startIdx = (simulationPage - 1) * simulationsPerPage
+                    const endIdx = startIdx + simulationsPerPage
+                    const pageSimulations = allSimulations.slice(startIdx, endIdx)
+
+                    return pageSimulations.map((simulation, index) => {
+                      const task = selectedTrajectory.tasks?.find(t => t.id === simulation.task_id) || {}
+                      const domain = task.user_scenario?.instructions?.domain || 'Unknown'
+
+                      return (
+                        <div
+                          key={simulation.id || (startIdx + index)}
+                          className="task-card"
+                          onClick={() => {
+                            setSelectedTask(simulation)
+                            setCurrentPage(1) // Reset pagination when selecting a new task
+                          }}
+                        >
+                          <div className="task-header">
+                            <span className="task-id">Task {getCleanTaskId(simulation.task_id)} - Trial {simulation.trial}</span>
+                            <span className="task-domain" data-domain={domain}>{domain}</span>
+                          </div>
+                          <div className="task-description">
+                            <p><strong>Project:</strong> {task.description?.project || 'No project available'}</p>
+                            <p><strong>CWE IDs:</strong> {task.description?.cwe_ids?.join(', ') || 'No CWE IDs available'}</p>
+                            <p><strong>Correct:</strong> {simulation.reward_info?.correct ? '✅ Yes' : '❌ No'}</p>
+                            <p><strong>Correct & Secure:</strong> {simulation.reward_info?.correct_secure ? '✅ Yes' : '❌ No'}</p>
+                            <p><strong>Termination:</strong> {simulation.termination_reason || 'Unknown'}</p>
+                          </div>
+                          <div className="task-stats">
+                            <span className="message-count">
+                              {simulation.messages?.length || 0} messages
+                            </span>
+                            <span className="duration-count">
+                              {simulation.duration ? `${Math.round(simulation.duration)}s` : 'N/A'}
+                            </span>
+                          </div>
                         </div>
-                        <div className="task-description">
-                          <p><strong>Project:</strong> {task.description?.project || 'No project available'}</p>
-                          <p><strong>CWE IDs:</strong> {task.description?.cwe_ids?.join(', ') || 'No CWE IDs available'}</p>
-                          <p><strong>Correct:</strong> {simulation.reward_info?.correct ? '✅ Yes' : '❌ No'}</p>
-                          <p><strong>Correct & Secure:</strong> {simulation.reward_info?.correct_secure ? '✅ Yes' : '❌ No'}</p>
-                          <p><strong>Termination:</strong> {simulation.termination_reason || 'Unknown'}</p>
-                        </div>
-                        <div className="task-stats">
-                          <span className="message-count">
-                            {simulation.messages?.length || 0} messages
+                      )
+                    })
+                  })()}
+                </div>
+
+                {/* Simulation grid pagination */}
+                {(selectedTrajectory.simulations?.length || 0) > simulationsPerPage && (() => {
+                  const totalSims = selectedTrajectory.simulations.length
+                  const totalSimPages = Math.ceil(totalSims / simulationsPerPage)
+                  return (
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '2rem',
+                      marginBottom: '1rem',
+                      padding: '1rem',
+                      backgroundColor: '#f5f5f5',
+                      borderRadius: '8px',
+                      border: '1px solid #e0e0e0'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <label style={{ fontSize: '0.9rem', fontWeight: '500' }}>Per page:</label>
+                        <select
+                          className="pagination-select"
+                          value={simulationsPerPage}
+                          onChange={(e) => {
+                            setSimulationsPerPage(Number(e.target.value))
+                            setSimulationPage(1)
+                          }}
+                          style={{
+                            padding: '0.5rem',
+                            borderRadius: '4px',
+                            border: 'none',
+                            backgroundColor: 'white',
+                            fontSize: '0.9rem',
+                            color: '#333',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                          <option value={200}>200</option>
+                        </select>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <span style={{ fontSize: '0.9rem', color: '#666' }}>
+                          Showing {(simulationPage - 1) * simulationsPerPage + 1} - {Math.min(simulationPage * simulationsPerPage, totalSims)} of {totalSims} simulations
+                        </span>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <button
+                            onClick={() => setSimulationPage(p => Math.max(1, p - 1))}
+                            disabled={simulationPage === 1}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              border: 'none',
+                              borderRadius: '4px',
+                              backgroundColor: simulationPage === 1 ? '#d0d0d0' : '#E0143A',
+                              color: simulationPage === 1 ? '#666' : 'white',
+                              cursor: simulationPage === 1 ? 'not-allowed' : 'pointer',
+                              fontSize: '0.9rem',
+                              fontWeight: '500',
+                              transition: 'background-color 0.2s'
+                            }}
+                          >
+                            Previous
+                          </button>
+                          <span style={{
+                            padding: '0.5rem 1rem',
+                            fontSize: '0.9rem',
+                            color: '#333',
+                            fontWeight: '500'
+                          }}>
+                            Page {simulationPage} of {totalSimPages}
                           </span>
-                          <span className="duration-count">
-                            {simulation.duration ? `${Math.round(simulation.duration)}s` : 'N/A'}
-                          </span>
+                          <button
+                            onClick={() => setSimulationPage(p => Math.min(totalSimPages, p + 1))}
+                            disabled={simulationPage >= totalSimPages}
+                            style={{
+                              padding: '0.5rem 1rem',
+                              border: 'none',
+                              borderRadius: '4px',
+                              backgroundColor: simulationPage >= totalSimPages ? '#d0d0d0' : '#E0143A',
+                              color: simulationPage >= totalSimPages ? '#666' : 'white',
+                              cursor: simulationPage >= totalSimPages ? 'not-allowed' : 'pointer',
+                              fontSize: '0.9rem',
+                              fontWeight: '500',
+                              transition: 'background-color 0.2s'
+                            }}
+                          >
+                            Next
+                          </button>
                         </div>
                       </div>
-                    )
-                  })}
-                </div>
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
@@ -977,7 +1083,7 @@ const TrajectoryVisualizer = () => {
                               target="_blank" 
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
-                              style={{ color: '#3b82f6', textDecoration: 'underline' }}
+                              style={{ color: '#C41230', textDecoration: 'underline' }}
                             >
                               View Info Page
                             </a>
@@ -1159,16 +1265,17 @@ const TrajectoryVisualizer = () => {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                           <label htmlFor="messages-per-page" style={{ fontSize: '0.9rem', fontWeight: '500' }}>Messages per page:</label>
                           <select
+                            className="pagination-select"
                             id="messages-per-page"
                             value={messagesPerPage}
                             onChange={(e) => {
                               setMessagesPerPage(Number(e.target.value))
                               setCurrentPage(1) // Reset to first page when changing page size
                             }}
-                            style={{ 
-                              padding: '0.5rem', 
-                              borderRadius: '4px', 
-                              border: '1px solid #ccc',
+                            style={{
+                              padding: '0.5rem',
+                              borderRadius: '4px',
+                              border: 'none',
                               backgroundColor: 'white',
                               fontSize: '0.9rem',
                               color: '#333',
@@ -1194,7 +1301,7 @@ const TrajectoryVisualizer = () => {
                                 padding: '0.5rem 1rem',
                                 border: 'none',
                                 borderRadius: '4px',
-                                backgroundColor: currentPage === 1 ? '#d0d0d0' : '#3b82f6',
+                                backgroundColor: currentPage === 1 ? '#d0d0d0' : '#E0143A',
                                 color: currentPage === 1 ? '#666' : 'white',
                                 cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
                                 fontSize: '0.9rem',
@@ -1203,12 +1310,12 @@ const TrajectoryVisualizer = () => {
                               }}
                               onMouseEnter={(e) => {
                                 if (currentPage !== 1) {
-                                  e.target.style.backgroundColor = '#2563eb'
+                                  e.target.style.backgroundColor = '#9D0E26'
                                 }
                               }}
                               onMouseLeave={(e) => {
                                 if (currentPage !== 1) {
-                                  e.target.style.backgroundColor = '#3b82f6'
+                                  e.target.style.backgroundColor = '#E0143A'
                                 }
                               }}
                             >
@@ -1231,7 +1338,7 @@ const TrajectoryVisualizer = () => {
                                 padding: '0.5rem 1rem',
                                 border: 'none',
                                 borderRadius: '4px',
-                                backgroundColor: currentPage >= messageData.totalPages ? '#d0d0d0' : '#3b82f6',
+                                backgroundColor: currentPage >= messageData.totalPages ? '#d0d0d0' : '#E0143A',
                                 color: currentPage >= messageData.totalPages ? '#666' : 'white',
                                 cursor: currentPage >= messageData.totalPages ? 'not-allowed' : 'pointer',
                                 fontSize: '0.9rem',
@@ -1240,12 +1347,12 @@ const TrajectoryVisualizer = () => {
                               }}
                               onMouseEnter={(e) => {
                                 if (currentPage < messageData.totalPages) {
-                                  e.target.style.backgroundColor = '#2563eb'
+                                  e.target.style.backgroundColor = '#9D0E26'
                                 }
                               }}
                               onMouseLeave={(e) => {
                                 if (currentPage < messageData.totalPages) {
-                                  e.target.style.backgroundColor = '#3b82f6'
+                                  e.target.style.backgroundColor = '#E0143A'
                                 }
                               }}
                             >
