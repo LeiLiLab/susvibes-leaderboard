@@ -1,6 +1,159 @@
 import { useState, useEffect } from 'react'
 import './Leaderboard.css'
 
+// Colors for different LLM backbones - maximally distinct color palette
+const PREDEFINED_MODEL_COLORS = {
+  'Claude-3.7-Sonnet': '#22c55e', // Bright Green
+  'GPT-4.1': '#3b82f6', // Bright Blue
+  'o4-mini': '#a855f7', // Purple
+  'GPT-4.1-mini': '#f97316', // Orange
+  'Claude Opus 4.1': '#06b6d4', // Cyan
+  'GPT-5': '#ef4444', // Bright Red
+  'Kimi-k2': '#e91e63', // Pink/Magenta
+  'o3': '#6366f1', // Indigo
+  'Claude Opus 4': '#ec4899', // Pink
+  'Claude Sonnet 4': '#84cc16', // Lime Green
+  'DeepSeek-V3-0324': '#dc2626', // Dark Red
+  'Qwen3-235B-A22B': '#fbbf24', // Yellow
+  'Gemini-2.5-Flash': '#10b981', // Emerald
+  'Claude 4 Sonnet': '#0891b2', // Sky Blue
+  'Gemini 3 Pro': '#2563eb' // Royal Blue
+}
+
+// Cache for dynamically generated colors
+const dynamicColorCache = {}
+
+// Generate a consistent color for a model name using string hash
+const getModelColor = (modelName) => {
+  // Check predefined colors first
+  if (PREDEFINED_MODEL_COLORS[modelName]) {
+    return PREDEFINED_MODEL_COLORS[modelName]
+  }
+
+  // Check cache for already-generated colors
+  if (dynamicColorCache[modelName]) {
+    return dynamicColorCache[modelName]
+  }
+
+  // Generate a consistent color based on string hash
+  // Using HSL for perceptually distinct colors
+  let hash = 0
+  for (let i = 0; i < modelName.length; i++) {
+    hash = modelName.charCodeAt(i) + ((hash << 5) - hash)
+  }
+
+  // Generate hue from hash (0-360), keeping saturation and lightness fixed for visibility
+  const hue = Math.abs(hash) % 360
+  const saturation = 65 + (Math.abs(hash >> 8) % 20) // 65-85%
+  const lightness = 45 + (Math.abs(hash >> 16) % 15) // 45-60%
+
+  const color = `hsl(${hue}, ${saturation}%, ${lightness}%)`
+  dynamicColorCache[modelName] = color
+
+  return color
+}
+
+// Point styles for different agent frameworks
+const POINT_STYLES = ['circle', 'triangle', 'rect', 'rectRot', 'star', 'cross', 'crossRot', 'dash']
+
+// Cache for framework point style assignments
+const frameworkShapeCache = {}
+let frameworkShapeIndex = 0
+
+// Get a consistent point style for a framework name
+const getFrameworkShape = (frameworkName) => {
+  if (frameworkShapeCache[frameworkName]) {
+    return frameworkShapeCache[frameworkName]
+  }
+
+  // Assign next available shape style
+  const shape = POINT_STYLES[frameworkShapeIndex % POINT_STYLES.length]
+  frameworkShapeCache[frameworkName] = shape
+  frameworkShapeIndex++
+
+  return shape
+}
+
+// Draw a point shape on a canvas element
+const drawPointShape = (canvas, pointStyle, color = '#C41230') => {
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  const size = 8
+
+  ctx.clearRect(0, 0, 16, 16)
+  ctx.fillStyle = color
+  ctx.strokeStyle = color
+  ctx.lineWidth = 2
+
+  switch (pointStyle) {
+    case 'circle':
+      ctx.beginPath()
+      ctx.arc(8, 8, size / 2, 0, Math.PI * 2)
+      ctx.fill()
+      break
+    case 'triangle':
+      ctx.beginPath()
+      ctx.moveTo(8, 4)
+      ctx.lineTo(4, 12)
+      ctx.lineTo(12, 12)
+      ctx.closePath()
+      ctx.fill()
+      break
+    case 'rect':
+      ctx.fillRect(4, 4, size, size)
+      break
+    case 'rectRot':
+      ctx.save()
+      ctx.translate(8, 8)
+      ctx.rotate(Math.PI / 4)
+      ctx.fillRect(-size / 2, -size / 2, size, size)
+      ctx.restore()
+      break
+    case 'star':
+      ctx.beginPath()
+      for (let i = 0; i < 5; i++) {
+        const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2
+        const x = 8 + size / 2 * Math.cos(angle)
+        const y = 8 + size / 2 * Math.sin(angle)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.closePath()
+      ctx.fill()
+      break
+    case 'cross':
+      ctx.beginPath()
+      ctx.moveTo(8, 4)
+      ctx.lineTo(8, 12)
+      ctx.moveTo(4, 8)
+      ctx.lineTo(12, 8)
+      ctx.stroke()
+      break
+    case 'crossRot':
+      ctx.save()
+      ctx.translate(8, 8)
+      ctx.rotate(Math.PI / 4)
+      ctx.beginPath()
+      ctx.moveTo(0, -size / 2)
+      ctx.lineTo(0, size / 2)
+      ctx.moveTo(-size / 2, 0)
+      ctx.lineTo(size / 2, 0)
+      ctx.stroke()
+      ctx.restore()
+      break
+    case 'dash':
+      ctx.beginPath()
+      ctx.moveTo(4, 8)
+      ctx.lineTo(12, 8)
+      ctx.stroke()
+      break
+    default:
+      ctx.beginPath()
+      ctx.arc(8, 8, size / 2, 0, Math.PI * 2)
+      ctx.fill()
+  }
+}
+
 const Leaderboard = () => {
   // Chart state for leaderboard
   const [chartInstance, setChartInstance] = useState(null)
@@ -28,20 +181,29 @@ const Leaderboard = () => {
   })
   // Info tooltip state
   const [showFilterInfo, setShowFilterInfo] = useState(false)
-  
+
   // Add state for dynamically loaded data
   const [passKData, setPassKData] = useState({})
   const [fullSubmissionData, setFullSubmissionData] = useState({}) // Store full submission.json data
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
-  
+
   // Modal state for submission details
   const [showModal, setShowModal] = useState(false)
   const [selectedSubmission, setSelectedSubmission] = useState(null)
-  
+
   // Chart legend data state
   const [chartLegendData, setChartLegendData] = useState(null)
   const [modalClosing, setModalClosing] = useState(false)
+
+  // Chart filter state - stores all available and selected models/frameworks
+  const [allModels, setAllModels] = useState([])
+  const [allFrameworks, setAllFrameworks] = useState([])
+  const [selectedModels, setSelectedModels] = useState(new Set())
+  const [selectedFrameworks, setSelectedFrameworks] = useState(new Set())
+
+  // Pinned tooltips state for persistent click-based popups
+  const [pinnedTooltips, setPinnedTooltips] = useState([])
 
   // Helper function to create composite key from agent framework and model name
   const createAgentName = (agentFramework, modelName) => {
@@ -82,19 +244,19 @@ const Leaderboard = () => {
     try {
       setIsLoading(true)
       setLoadError(null)
-      
+
       // Load the manifest file to get list of submissions from new directory structure
       const manifestResponse = await fetch(`${import.meta.env.BASE_URL}submissions/manifest.json`)
       if (!manifestResponse.ok) {
         throw new Error('Failed to load submissions manifest')
       }
-      
+
       const manifest = await manifestResponse.json()
       const submissionDirs = manifest.submissions || []
-      
+
       const loadedData = {}
       const fullSubmissions = {}
-      
+
       // Load each submission from its directory
       for (const submissionDir of submissionDirs) {
         try {
@@ -103,25 +265,25 @@ const Leaderboard = () => {
             console.warn(`Failed to load ${submissionDir}: ${response.status}`)
             continue
           }
-          
+
           const submission = await response.json()
-          
+
           // Create composite key (agent name) from agent framework and model name
           const agentFramework = submission.methodology?.agent_framework || null
           const agentName = createAgentName(agentFramework, submission.model_name)
-          
+
           // Store full submission data for modal display
           fullSubmissions[agentName] = {
             ...submission,
             submissionDir // Include directory name for potential trajectory access
           }
-          
+
           // Convert JSON format to internal format for SusVibes (Python domain only)
           const pythonData = {
             funcPass1: submission.results.python?.func_pass_1 || null,
             secPass1: submission.results.python?.sec_pass_1 || null
           }
-          
+
           const modelData = {
             python: pythonData,
             // Cost information
@@ -136,20 +298,20 @@ const Leaderboard = () => {
             // Add verification status
             // For 'custom' submissions, we relax the modified_prompts constraint
             // Custom submissions are allowed to modify prompts as long as they have trajectories and don't omit questions
-            isVerified: submission.trajectories_available && 
-                       submission.methodology?.verification?.omitted_questions === false &&
-                       (submission.submission_type === 'custom' || submission.methodology?.verification?.modified_prompts === false),
+            isVerified: submission.trajectories_available &&
+              submission.methodology?.verification?.omitted_questions === false &&
+              (submission.submission_type === 'custom' || submission.methodology?.verification?.modified_prompts === false),
             verificationDetails: submission.methodology?.verification || null,
             // Submission type: 'standard' (default) or 'custom'
             submissionType: submission.submission_type || 'standard'
           }
-          
+
           loadedData[agentName] = modelData
         } catch (error) {
           console.warn(`Error loading ${submissionDir}:`, error)
         }
       }
-      
+
       setPassKData(loadedData)
       setFullSubmissionData(fullSubmissions)
     } catch (error) {
@@ -165,6 +327,34 @@ const Leaderboard = () => {
     loadSubmissionData()
   }, [])
 
+  // Initialize filter options when data loads
+  useEffect(() => {
+    if (Object.keys(passKData).length > 0) {
+      const models = new Set()
+      const frameworks = new Set()
+
+      Object.keys(passKData).forEach(agentName => {
+        const modelData = passKData[agentName]
+        const domainData = modelData[domain]
+
+        // Only include models/frameworks that have valid chart data
+        if (domainData && domainData.funcPass1 !== null && domainData.secPass1 !== null) {
+          const modelName = modelData.modelName || parseAgentName(agentName).modelName
+          const agentFramework = modelData.agentFramework || parseAgentName(agentName).agentFramework || 'unknown'
+          models.add(modelName)
+          frameworks.add(agentFramework)
+        }
+      })
+
+      setAllModels(Array.from(models).sort())
+      setAllFrameworks(Array.from(frameworks).sort())
+
+      // Initialize with all selected by default (only if currently empty)
+      setSelectedModels(prev => prev.size === 0 ? new Set(models) : prev)
+      setSelectedFrameworks(prev => prev.size === 0 ? new Set(frameworks) : prev)
+    }
+  }, [passKData, domain])
+
   // Initialize chart when leaderboard view is active and chart view is selected
   useEffect(() => {
     if (leaderboardView === 'chart' && !isLoading && Object.keys(passKData).length > 0) {
@@ -172,12 +362,12 @@ const Leaderboard = () => {
       const timer = setTimeout(() => {
         initializeChart()
       }, 200)
-      
+
       return () => {
         clearTimeout(timer)
       }
     }
-  }, [leaderboardView, domain, isLoading, passKData, showStandard, showCustom]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [leaderboardView, domain, isLoading, passKData, showStandard, showCustom, selectedModels, selectedFrameworks]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draw point styles on legend canvases when legend data changes
   useEffect(() => {
@@ -188,17 +378,17 @@ const Leaderboard = () => {
           const ctx = canvas.getContext('2d')
           const pointStyle = canvas.getAttribute('data-point-style')
           const size = 8
-          
+
           ctx.clearRect(0, 0, 16, 16)
           ctx.fillStyle = '#C41230'
           ctx.strokeStyle = '#C41230'
           ctx.lineWidth = 2
-          
+
           // Draw point based on style
-          switch(pointStyle) {
+          switch (pointStyle) {
             case 'circle':
               ctx.beginPath()
-              ctx.arc(8, 8, size/2, 0, Math.PI * 2)
+              ctx.arc(8, 8, size / 2, 0, Math.PI * 2)
               ctx.fill()
               break
             case 'triangle':
@@ -216,15 +406,15 @@ const Leaderboard = () => {
               ctx.save()
               ctx.translate(8, 8)
               ctx.rotate(Math.PI / 4)
-              ctx.fillRect(-size/2, -size/2, size, size)
+              ctx.fillRect(-size / 2, -size / 2, size, size)
               ctx.restore()
               break
             case 'star':
               ctx.beginPath()
               for (let i = 0; i < 5; i++) {
                 const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2
-                const x = 8 + size/2 * Math.cos(angle)
-                const y = 8 + size/2 * Math.sin(angle)
+                const x = 8 + size / 2 * Math.cos(angle)
+                const y = 8 + size / 2 * Math.sin(angle)
                 if (i === 0) ctx.moveTo(x, y)
                 else ctx.lineTo(x, y)
               }
@@ -244,10 +434,10 @@ const Leaderboard = () => {
               ctx.translate(8, 8)
               ctx.rotate(Math.PI / 4)
               ctx.beginPath()
-              ctx.moveTo(0, -size/2)
-              ctx.lineTo(0, size/2)
-              ctx.moveTo(-size/2, 0)
-              ctx.lineTo(size/2, 0)
+              ctx.moveTo(0, -size / 2)
+              ctx.lineTo(0, size / 2)
+              ctx.moveTo(-size / 2, 0)
+              ctx.lineTo(size / 2, 0)
               ctx.stroke()
               ctx.restore()
               break
@@ -259,12 +449,12 @@ const Leaderboard = () => {
               break
             default:
               ctx.beginPath()
-              ctx.arc(8, 8, size/2, 0, Math.PI * 2)
+              ctx.arc(8, 8, size / 2, 0, Math.PI * 2)
               ctx.fill()
           }
         })
       }
-      
+
       // Small delay to ensure DOM is ready
       const timer = setTimeout(drawLegendPoints, 100)
       return () => clearTimeout(timer)
@@ -318,31 +508,9 @@ const Leaderboard = () => {
     }
 
     const ctx = canvas.getContext('2d')
-    
-    // Colors for different LLM backbones - maximally distinct color palette
-    // Each color is chosen to maximize perceptual separation
-    const modelColors = {
-      'Claude-3.7-Sonnet': '#22c55e', // Bright Green
-      'GPT-4.1': '#3b82f6', // Bright Blue
-      'o4-mini': '#a855f7', // Purple
-      'GPT-4.1-mini': '#f97316', // Orange
-      'Claude Opus 4.1': '#06b6d4', // Cyan
-      'GPT-5': '#ef4444', // Bright Red
-      'Kimi-k2': '#e91e63', // Pink/Magenta
-      'o3': '#6366f1', // Indigo
-      'Claude Opus 4': '#ec4899', // Pink
-      'Claude Sonnet 4': '#84cc16', // Lime Green (changed from emerald to be more distinct)
-      'DeepSeek-V3-0324': '#dc2626', // Dark Red
-      'Qwen3-235B-A22B': '#fbbf24', // Yellow (changed from amber for better distinction)
-      'Gemini-2.5-Flash': '#10b981', // Emerald (changed from lime)
-      'Claude 4 Sonnet': '#0891b2', // Sky Blue
-      'Gemini 3 Pro': '#2563eb' // Royal Blue
-    }
 
-    // Point styles for different agent frameworks
-    const pointStyles = ['circle', 'triangle', 'rect', 'rectRot', 'star', 'cross', 'crossRot', 'dash']
-    const frameworkPointStyles = {}
-    let frameworkIndex = 0
+    // Use getModelColor helper for consistent, scalable colors
+    // Use getFrameworkShape helper for consistent, scalable shapes
 
     const createDatasets = () => {
       // Group data points by agent framework to create datasets with different point styles
@@ -355,40 +523,39 @@ const Leaderboard = () => {
       Object.keys(passKData).forEach(agentName => {
         const modelData = passKData[agentName]
         const domainData = modelData[domain]
-        
+
         // Filter by submission type
         const isStandard = modelData.submissionType === 'standard' || !modelData.submissionType
         const isCustom = modelData.submissionType === 'custom'
         if ((isStandard && !showStandard) || (isCustom && !showCustom)) {
           return
         }
-        
+
         // Skip models that don't have both funcPass1 and secPass1 data
         if (!domainData || domainData.funcPass1 === null || domainData.secPass1 === null) {
           return
         }
-        
+
         const modelName = modelData.modelName || parseAgentName(agentName).modelName
         const agentFramework = modelData.agentFramework || parseAgentName(agentName).agentFramework || 'unknown'
-        
+
+        // Filter by selected models and frameworks
+        if (!selectedModels.has(modelName) || !selectedFrameworks.has(agentFramework)) {
+          return
+        }
+
         // Track unique models and frameworks for legend
         seenModels.add(modelName)
         seenFrameworks.add(agentFramework)
-        
+
         // Initialize framework group if needed
         if (!frameworkGroups[agentFramework]) {
           frameworkGroups[agentFramework] = []
-          // Assign point style to framework
-          if (!frameworkPointStyles[agentFramework]) {
-            frameworkPointStyles[agentFramework] = pointStyles[frameworkIndex % pointStyles.length]
-            frameworkIndex++
-          }
         }
-        
-        // Get color based on LLM backbone
-        // Use a more distinct fallback color if model not found
-        const color = modelColors[modelName] || '#9333ea'
-        
+
+        // Get color based on LLM backbone using scalable color function
+        const color = getModelColor(modelName)
+
         frameworkGroups[agentFramework].push({
           x: domainData.funcPass1,
           y: domainData.secPass1,
@@ -403,19 +570,18 @@ const Leaderboard = () => {
       setChartLegendData({
         models: Array.from(seenModels).map(modelName => ({
           name: modelName,
-          color: modelColors[modelName] || '#3b82f6'
+          color: getModelColor(modelName)
         })),
         frameworks: Array.from(seenFrameworks).map(framework => ({
           name: framework,
-          pointStyle: frameworkPointStyles[framework] || 'circle'
+          pointStyle: getFrameworkShape(framework)
         }))
       })
 
-      // Second pass: create datasets (one per framework) with points colored by LLM backbone
       Object.keys(frameworkGroups).forEach(framework => {
         const points = frameworkGroups[framework]
-        const pointStyle = frameworkPointStyles[framework]
-        
+        const pointStyle = getFrameworkShape(framework)
+
         // Create separate dataset for each point to allow different colors
         points.forEach(point => {
           datasets.push({
@@ -444,7 +610,7 @@ const Leaderboard = () => {
       let maxY = 0
       let minX = Infinity
       let minY = Infinity
-      
+
       datasets.forEach(dataset => {
         dataset.data.forEach(point => {
           if (point.x !== null && !isNaN(point.x)) {
@@ -457,7 +623,7 @@ const Leaderboard = () => {
           }
         })
       })
-      
+
       // If no valid data, use defaults
       if (minX === Infinity) {
         maxX = 100
@@ -467,18 +633,18 @@ const Leaderboard = () => {
         maxY = 100
         minY = 0
       }
-      
+
       // Add padding: 10% above max, but ensure at least some padding
       const xRange = maxX - minX
       const yRange = maxY - minY
       const xPadding = xRange > 0 ? Math.max(xRange * 0.1, 5) : 5 // At least 5 units padding
       const yPadding = yRange > 0 ? Math.max(yRange * 0.1, 5) : 5 // At least 5 units padding
-      
+
       const paddedMaxX = Math.min(100, maxX + xPadding)
       const paddedMaxY = Math.min(100, maxY + yPadding)
       const paddedMinX = Math.max(0, minX - xPadding)
       const paddedMinY = Math.max(0, minY - yPadding)
-      
+
       // Round up/down to nearest 5 for cleaner axis
       return {
         maxX: Math.ceil(paddedMaxX / 5) * 5,
@@ -519,14 +685,42 @@ const Leaderboard = () => {
           tooltip: {
             mode: 'point',
             intersect: true,
-            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-            titleColor: 'white',
-            bodyColor: 'white',
+            backgroundColor: 'rgba(255, 255, 255, 0.98)',
+            titleColor: '#1a202c',
+            bodyColor: '#4a5568',
             borderColor: '#C41230',
-            borderWidth: 1,
+            borderWidth: 2,
+            cornerRadius: 8,
+            padding: 12,
+            titleFont: {
+              size: 14,
+              weight: 'bold'
+            },
+            bodyFont: {
+              size: 13
+            },
+            displayColors: false,
             callbacks: {
-              label: function(context) {
-                return `${context.dataset.label}: FuncPass@1=${context.parsed.x.toFixed(1)}%, SecPass@1=${context.parsed.y.toFixed(1)}%`
+              title: function (contexts) {
+                if (contexts.length > 0) {
+                  const label = contexts[0].dataset.label || ''
+                  // Remove the 🆕 emoji for cleaner title
+                  return label.replace(' 🆕', '')
+                }
+                return ''
+              },
+              label: function (context) {
+                const lines = []
+                lines.push(`FuncPass@1: ${context.parsed.x.toFixed(1)}%`)
+                lines.push(`SecPass@1: ${context.parsed.y.toFixed(1)}%`)
+                // Check if it's a new submission
+                if (context.dataset.label && context.dataset.label.includes('🆕')) {
+                  lines.push('🆕 New Submission')
+                }
+                return lines
+              },
+              afterBody: function () {
+                return ['', '💡 Click to pin this tooltip']
               }
             }
           }
@@ -549,7 +743,7 @@ const Leaderboard = () => {
               color: '#e2e8f0'
             },
             ticks: {
-              callback: function(value) {
+              callback: function (value) {
                 return value + '%'
               }
             }
@@ -571,7 +765,7 @@ const Leaderboard = () => {
               color: '#e2e8f0'
             },
             ticks: {
-              callback: function(value) {
+              callback: function (value) {
                 return value + '%'
               }
             }
@@ -580,6 +774,34 @@ const Leaderboard = () => {
         elements: {
           point: {
             hoverRadius: 8
+          }
+        },
+        onClick: function (event, elements) {
+          if (elements.length > 0) {
+            const element = elements[0]
+            const datasetIndex = element.datasetIndex
+            const dataIndex = element.index
+            const dataset = this.data.datasets[datasetIndex]
+            const dataPoint = dataset.data[dataIndex]
+
+            // Get canvas position for tooltip placement
+            const canvasRect = event.chart.canvas.getBoundingClientRect()
+            const x = event.native.clientX - canvasRect.left
+            const y = event.native.clientY - canvasRect.top
+
+            // Create pinned tooltip data
+            const tooltipData = {
+              id: Date.now(),
+              label: dataset.label.replace(' 🆕', ''),
+              funcPass: dataPoint.x.toFixed(1),
+              secPass: dataPoint.y.toFixed(1),
+              isNew: dataset.label.includes('🆕'),
+              color: dataset.backgroundColor,
+              x: x,
+              y: y
+            }
+
+            setPinnedTooltips(prev => [...prev, tooltipData])
           }
         }
       }
@@ -654,19 +876,19 @@ const Leaderboard = () => {
         {/* Modern View Toggle Switch */}
         <div className="view-toggle-switch">
           <div className="toggle-container">
-            <button 
+            <button
               className={`toggle-option ${leaderboardView === 'table' ? 'active' : ''}`}
               onClick={() => setLeaderboardView('table')}
             >
               📋 Table
             </button>
-            <button 
+            <button
               className={`toggle-option ${leaderboardView === 'chart' ? 'active' : ''}`}
               onClick={() => setLeaderboardView('chart')}
             >
               📊 Chart
             </button>
-            <div 
+            <div
               className="toggle-slider"
               style={{
                 transform: leaderboardView === 'chart' ? 'translateX(100%)' : 'translateX(0%)'
@@ -685,8 +907,8 @@ const Leaderboard = () => {
         {/* Submission Type Filter */}
         <div className="submission-type-filter">
           <label className="checkbox-container">
-            <input 
-              type="checkbox" 
+            <input
+              type="checkbox"
               checked={showStandard}
               onChange={(e) => setShowStandard(e.target.checked)}
             />
@@ -694,8 +916,8 @@ const Leaderboard = () => {
             <span className="checkbox-label">Standard</span>
           </label>
           <label className="checkbox-container">
-            <input 
-              type="checkbox" 
+            <input
+              type="checkbox"
               checked={showCustom}
               onChange={(e) => setShowCustom(e.target.checked)}
             />
@@ -703,7 +925,7 @@ const Leaderboard = () => {
             <span className="checkbox-label">Custom</span>
           </label>
           <div className="filter-info-container">
-            <button 
+            <button
               className="filter-info-button"
               onClick={() => setShowFilterInfo(!showFilterInfo)}
               aria-label="What do Standard and Custom mean?"
@@ -742,42 +964,147 @@ const Leaderboard = () => {
           <div className="reliability-visualization">
             <div className="pass-k-chart-container">
               <canvas id="passKChart" width="800" height="400"></canvas>
-            </div>
-            {/* Custom Legend */}
-            {chartLegendData && (
-              <div className="chart-legend-container">
-                <div className="legend-section">
-                  <h4 className="legend-title">LLM Backbone (Color)</h4>
-                  <div className="legend-items">
-                    {chartLegendData.models.map((model, index) => (
-                      <div key={index} className="legend-item">
-                        <span 
-                          className="legend-color" 
-                          style={{ backgroundColor: model.color }}
-                        ></span>
-                        <span className="legend-label">{model.name}</span>
-                      </div>
-                    ))}
+              {/* Pinned Tooltips */}
+              {pinnedTooltips.map((tooltip) => (
+                <div
+                  key={tooltip.id}
+                  className="pinned-tooltip"
+                  style={{
+                    left: `${Math.min(tooltip.x, 280)}px`,
+                    top: `${tooltip.y}px`
+                  }}
+                >
+                  <button
+                    className="pinned-tooltip-close"
+                    onClick={() => setPinnedTooltips(prev => prev.filter(t => t.id !== tooltip.id))}
+                    aria-label="Close tooltip"
+                  >
+                    ×
+                  </button>
+                  <div className="pinned-tooltip-header">
+                    <span
+                      className="pinned-tooltip-color"
+                      style={{ backgroundColor: tooltip.color }}
+                    ></span>
+                    <span className="pinned-tooltip-title">{tooltip.label}</span>
+                    {tooltip.isNew && <span className="pinned-tooltip-badge">🆕 New</span>}
+                  </div>
+                  <div className="pinned-tooltip-body">
+                    <div className="pinned-tooltip-row">
+                      <span className="pinned-tooltip-key">FuncPass@1</span>
+                      <span className="pinned-tooltip-value">{tooltip.funcPass}%</span>
+                    </div>
+                    <div className="pinned-tooltip-row">
+                      <span className="pinned-tooltip-key">SecPass@1</span>
+                      <span className="pinned-tooltip-value">{tooltip.secPass}%</span>
+                    </div>
                   </div>
                 </div>
-                <div className="legend-section">
-                  <h4 className="legend-title">Agent Framework (Shape)</h4>
-                  <div className="legend-items">
-                    {chartLegendData.frameworks.map((framework, index) => (
-                      <div key={index} className="legend-item">
-                        <canvas 
-                          className="legend-point-canvas" 
-                          data-point-style={framework.pointStyle}
-                          width="16" 
-                          height="16"
-                        ></canvas>
-                        <span className="legend-label">{framework.name}</span>
-                      </div>
-                    ))}
+              ))}
+              {pinnedTooltips.length > 0 && (
+                <button
+                  className="clear-all-tooltips"
+                  onClick={() => setPinnedTooltips([])}
+                >
+                  Clear All Pins
+                </button>
+              )}
+            </div>
+            {/* Combined Legend & Filter */}
+            <div className="chart-legend-filter">
+              <div className="legend-filter-section">
+                <div className="legend-filter-header">
+                  <h4 className="legend-title">LLM Backbone (Color)</h4>
+                  <div className="filter-actions">
+                    <button
+                      className="filter-action-btn"
+                      onClick={() => setSelectedModels(new Set(allModels))}
+                    >
+                      All
+                    </button>
+                    <button
+                      className="filter-action-btn"
+                      onClick={() => setSelectedModels(new Set())}
+                    >
+                      None
+                    </button>
                   </div>
+                </div>
+                <div className="legend-filter-items">
+                  {allModels.map((modelName) => (
+                    <label key={modelName} className={`legend-filter-item ${selectedModels.has(modelName) ? 'selected' : 'deselected'}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedModels.has(modelName)}
+                        onChange={(e) => {
+                          const newSelected = new Set(selectedModels)
+                          if (e.target.checked) {
+                            newSelected.add(modelName)
+                          } else {
+                            newSelected.delete(modelName)
+                          }
+                          setSelectedModels(newSelected)
+                        }}
+                      />
+                      <span
+                        className="legend-color"
+                        style={{ backgroundColor: getModelColor(modelName) }}
+                      ></span>
+                      <span className="legend-label">{modelName}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
-            )}
+              <div className="legend-filter-section">
+                <div className="legend-filter-header">
+                  <h4 className="legend-title">Agent Framework (Shape)</h4>
+                  <div className="filter-actions">
+                    <button
+                      className="filter-action-btn"
+                      onClick={() => setSelectedFrameworks(new Set(allFrameworks))}
+                    >
+                      All
+                    </button>
+                    <button
+                      className="filter-action-btn"
+                      onClick={() => setSelectedFrameworks(new Set())}
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <div className="legend-filter-items">
+                  {allFrameworks.map((frameworkName) => (
+                    <label key={frameworkName} className={`legend-filter-item ${selectedFrameworks.has(frameworkName) ? 'selected' : 'deselected'}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFrameworks.has(frameworkName)}
+                        onChange={(e) => {
+                          const newSelected = new Set(selectedFrameworks)
+                          if (e.target.checked) {
+                            newSelected.add(frameworkName)
+                          } else {
+                            newSelected.delete(frameworkName)
+                          }
+                          setSelectedFrameworks(newSelected)
+                        }}
+                      />
+                      <canvas
+                        className="legend-shape-canvas"
+                        width="16"
+                        height="16"
+                        ref={(canvas) => {
+                          if (canvas) {
+                            drawPointShape(canvas, getFrameworkShape(frameworkName))
+                          }
+                        }}
+                      ></canvas>
+                      <span className="legend-label">{frameworkName}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )
       )}
@@ -785,278 +1112,278 @@ const Leaderboard = () => {
       {/* Table View */}
       {leaderboardView === 'table' && (
         <>
-        {/* Check if filters result in no data */}
-        {(!showStandard && !showCustom) ? (
-          <div className="filter-empty-state">
-            <div className="empty-icon">🔍</div>
-            <h3>No Results</h3>
-            <p>Please select at least one submission type filter (Standard or Custom) to view results.</p>
-          </div>
-        ) : (
-        <div className="reliability-metrics">
-        <div className="metrics-table-container">
-          <table className="reliability-table">
-            <thead>
-              <tr>
-                <th>Rank</th>
-                <th>Agent Name</th>
-                <th 
-                  className={`sortable ${sortColumn === 'llmbackbone' ? 'active' : ''}`}
-                  onClick={() => handleSort('llmbackbone')}
-                >
-                  LLM Backbone {sortColumn === 'llmbackbone' && (sortDirection === 'desc' ? '↓' : '↑')}
-                </th>
-                <th 
-                  className={`sortable ${sortColumn === 'agentframework' ? 'active' : ''}`}
-                  onClick={() => handleSort('agentframework')}
-                >
-                  Agent Framework {sortColumn === 'agentframework' && (sortDirection === 'desc' ? '↓' : '↑')}
-                </th>
-                <th>Submitting Org</th>
-                
-                <th 
-                  className={`sortable ${sortColumn === 'funcpass1' ? 'active' : ''}`}
-                  onClick={() => handleSort('funcpass1')}
-                >
-                  FuncPass@1 {sortColumn === 'funcpass1' && (sortDirection === 'desc' ? '↓' : '↑')}
-                </th>
-                <th 
-                  className={`sortable ${sortColumn === 'secpass1' ? 'active' : ''}`}
-                  onClick={() => handleSort('secpass1')}
-                >
-                  SecPass@1 {sortColumn === 'secpass1' && (sortDirection === 'desc' ? '↓' : '↑')}
-                </th>
-                <th>Avg Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(() => {
-                // Calculate domain-specific scores for ranking
-                const modelStats = Object.entries(passKData)
-                  .filter(([agentName, data]) => {
-                    // Filter by submission type first
-                    const isStandard = data.submissionType === 'standard' || !data.submissionType
-                    const isCustom = data.submissionType === 'custom'
-                    if ((isStandard && !showStandard) || (isCustom && !showCustom)) {
-                      return false
-                    }
-                    
-                    // Only include models that have data for Python domain
-                    const pythonData = data.python
-                    return pythonData && (pythonData.funcPass1 !== null || pythonData.secPass1 !== null)
-                  })
-                  .map(([agentName, data]) => {
-                  const domainData = data.python
-                  const funcPass1Score = domainData.funcPass1
-                  const secPass1Score = domainData.secPass1
-                  const hasAnyData = funcPass1Score !== null || secPass1Score !== null
-                  
-                  return {
-                    agentName: agentName,
-                    modelName: data.modelName,
-                    agentFramework: data.agentFramework,
-                    data: data,
-                    domainData: domainData,
-                    funcPass1Score,
-                    secPass1Score,
-                    hasAnyData,
-                    organization: data.organization
-                  }
-                })
-                
-                // Sort by selected column and direction
-                modelStats.sort((a, b) => {
-                  // First priority: models with any data (only for numeric columns)
-                  if (sortColumn === 'funcpass1' || sortColumn === 'secpass1') {
-                    if (a.hasAnyData && !b.hasAnyData) return -1
-                    if (!a.hasAnyData && b.hasAnyData) return 1
-                    if (!a.hasAnyData && !b.hasAnyData) return 0
-                  }
-                  
-                  let aValue, bValue
-                  let isStringSort = false
-                  
-                  if (sortColumn === 'funcpass1') {
-                    aValue = a.funcPass1Score
-                    bValue = b.funcPass1Score
-                  } else if (sortColumn === 'secpass1') {
-                    aValue = a.secPass1Score
-                    bValue = b.secPass1Score
-                  } else if (sortColumn === 'llmbackbone') {
-                    aValue = a.modelName || ''
-                    bValue = b.modelName || ''
-                    isStringSort = true
-                  } else if (sortColumn === 'agentframework') {
-                    aValue = a.agentFramework || ''
-                    bValue = b.agentFramework || ''
-                    isStringSort = true
-                  } else {
-                    // Default to funcPass1
-                    aValue = a.funcPass1Score
-                    bValue = b.funcPass1Score
-                  }
-                  
-                  // Handle null values (missing data) for numeric sorts
-                  if (!isStringSort) {
-                    if (aValue === null && bValue === null) return 0
-                    if (aValue === null) return 1
-                    if (bValue === null) return -1
-                  }
-                  
-                  const multiplier = sortDirection === 'desc' ? 1 : -1
-                  
-                  if (isStringSort) {
-                    // String sorting
-                    return aValue.localeCompare(bValue) * multiplier
-                  } else {
-                    // Numeric sorting
-                    return (bValue - aValue) * multiplier
-                  }
-                })
-                
-                // Show empty state if no results after filtering
-                if (modelStats.length === 0) {
-                  return (
-                    <tr className="empty-results-row">
-                      <td colSpan="8" className="empty-results-cell">
-                        <div className="empty-results-content">
-                          <span className="empty-icon">🔧</span>
-                          <span className="empty-text">
-                            {showCustom && !showStandard 
-                              ? "No custom submissions yet. Be the first to submit results with a custom scaffold!"
-                              : "No results match the current filters."}
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                }
-                
-                return modelStats.map((model, index) => (
-                   <tr key={model.agentName} className={`model-row ${index === 0 && model.hasAnyData && sortColumn === 'funcpass1' && sortDirection === 'desc' ? 'top-performer' : ''} ${model.data.isNew ? 'new-model' : ''}`}>
-                     {/* Rank */}
-                     <td className={`rank-cell ${index === 0 ? 'gold-medal' : index === 1 ? 'silver-medal' : index === 2 ? 'bronze-medal' : ''}`}>
-                       {index === 0 && model.hasAnyData ? (
-                         <span className="medal-icon">🥇</span>
-                       ) : index === 1 && model.hasAnyData ? (
-                         <span className="medal-icon">🥈</span>
-                       ) : index === 2 && model.hasAnyData ? (
-                         <span className="medal-icon">🥉</span>
-                       ) : (
-                         <span className="rank-number">#{index + 1}</span>
-                       )}
-                     </td>
-                     {/* Agent Name */}
-                     <td className="agent-name-info">
-                       <div 
-                         className="agent-name clickable-model" 
-                         onClick={() => handleModelClick(model.agentName)}
-                         title="Click to view submission details"
-                       >
-                         {model.agentName}
-                         {model.data.isNew && <span className="new-badge">NEW</span>}
-                         {!model.data.isVerified && (
-                           <span className="unverified-badge" title="Unverified submission - see details for more information">
-                             ⚠️
-                           </span>
-                         )}
-                       </div>
-                     </td>
-                     
-                     {/* LLM Backbone */}
-                     <td className="llm-backbone-info">
-                       {model.modelName ? (
-                         <span className="llm-backbone-name">{model.modelName}</span>
-                       ) : (
-                         <span className="no-data">—</span>
-                       )}
-                     </td>
+          {/* Check if filters result in no data */}
+          {(!showStandard && !showCustom) ? (
+            <div className="filter-empty-state">
+              <div className="empty-icon">🔍</div>
+              <h3>No Results</h3>
+              <p>Please select at least one submission type filter (Standard or Custom) to view results.</p>
+            </div>
+          ) : (
+            <div className="reliability-metrics">
+              <div className="metrics-table-container">
+                <table className="reliability-table">
+                  <thead>
+                    <tr>
+                      <th>Rank</th>
+                      <th>Agent Name</th>
+                      <th
+                        className={`sortable ${sortColumn === 'llmbackbone' ? 'active' : ''}`}
+                        onClick={() => handleSort('llmbackbone')}
+                      >
+                        LLM Backbone {sortColumn === 'llmbackbone' && (sortDirection === 'desc' ? '↓' : '↑')}
+                      </th>
+                      <th
+                        className={`sortable ${sortColumn === 'agentframework' ? 'active' : ''}`}
+                        onClick={() => handleSort('agentframework')}
+                      >
+                        Agent Framework {sortColumn === 'agentframework' && (sortDirection === 'desc' ? '↓' : '↑')}
+                      </th>
+                      <th>Submitting Org</th>
 
-                     {/* Agent Framework */}
-                     <td className="agent-framework-info">
-                       {model.agentFramework ? (
-                         <span className="agent-framework-name">{model.agentFramework}</span>
-                       ) : (
-                         <span className="no-data">—</span>
-                       )}
-                     </td>
-                     
-                     {/* Organization */}
-                     <td className="organization-info">
-                       <div className="org-container">
-                         <div className="company-logo">
-                          {model.organization === 'Anthropic' && (
-                            <img src={`${import.meta.env.BASE_URL}claude.png`} alt="Anthropic" className="logo-img" />
-                          )}
-                          {model.organization === 'OpenAI' && (
-                            <img src={`${import.meta.env.BASE_URL}openai.svg`} alt="OpenAI" className="logo-img" />
-                          )}
-                          {model.organization === 'Sierra' && (
-                            <img src={`${import.meta.env.BASE_URL}sierra-logo.png`} alt="Sierra" className="logo-img" />
-                          )}
-                          {model.organization === 'Moonshot AI' && (
-                            <span className="emoji-logo">🚀</span>
-                          )}
-                          {model.organization === 'DeepSeek' && (
-                            <img src={`${import.meta.env.BASE_URL}DeepSeek_logo_icon.png`} alt="DeepSeek" className="logo-img" />
-                          )}
-                          {(model.organization === 'Alibaba' || model.organization === 'Qwen') && (
-                            <img src={`${import.meta.env.BASE_URL}qwen-color.png`} alt="Qwen" className="logo-img" />
-                          )}
-                         {model.organization === 'Google' && (
-                           <img src={`${import.meta.env.BASE_URL}Google__G__logo.svg.png`} alt="Google" className="logo-img" />
-                         )}
-                         {model.organization === 'NVIDIA' && (
-                           <img src={`${import.meta.env.BASE_URL}Logo-nvidia-transparent-PNG.png`} alt="NVIDIA" className="logo-img" />
-                         )}
-                        </div>
-                         <span className="org-name">{model.organization}</span>
-                       </div>
-                     </td>
-                     
-                     
-                     {/* FuncPass@1 */}
-                     <td className="metric-cell">
-                       {model.funcPass1Score !== null ? (
-                         <span className="metric-value">{model.funcPass1Score.toFixed(1)}%</span>
-                       ) : (
-                         <span className="no-data">No Data</span>
-                       )}
-                     </td>
-                     {/* SecPass@1 */}
-                     <td className="metric-cell">
-                       {model.secPass1Score !== null ? (
-                         <span className="metric-value">{model.secPass1Score.toFixed(1)}%</span>
-                       ) : (
-                         <span className="no-data">No Data</span>
-                       )}
-                     </td>
-                     
-                     {/* Average Cost */}
-                     <td className="cost-cell">
-                       {(() => {
-                         const domainCost = model.data.costs.python
-                         if (domainCost !== null && domainCost !== undefined) {
-                           return <span className="cost-value">${domainCost.toFixed(3)}</span>
-                         } else {
-                           return <span className="no-data">—</span>
-                         }
-                       })()}
-                     </td>
-                  </tr>
-                ))
-              })()}
-            </tbody>
-          </table>
-        </div>
-        <div className="verification-note">
-          <span className="note-icon">⚠️</span>
-          <span className="note-text">
-            The warning icon indicates unverified submissions. Click on any model name to view full verification details.
-          </span>
-        </div>
-        </div>
-        )}
+                      <th
+                        className={`sortable ${sortColumn === 'funcpass1' ? 'active' : ''}`}
+                        onClick={() => handleSort('funcpass1')}
+                      >
+                        FuncPass@1 {sortColumn === 'funcpass1' && (sortDirection === 'desc' ? '↓' : '↑')}
+                      </th>
+                      <th
+                        className={`sortable ${sortColumn === 'secpass1' ? 'active' : ''}`}
+                        onClick={() => handleSort('secpass1')}
+                      >
+                        SecPass@1 {sortColumn === 'secpass1' && (sortDirection === 'desc' ? '↓' : '↑')}
+                      </th>
+                      <th>Avg Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      // Calculate domain-specific scores for ranking
+                      const modelStats = Object.entries(passKData)
+                        .filter(([agentName, data]) => {
+                          // Filter by submission type first
+                          const isStandard = data.submissionType === 'standard' || !data.submissionType
+                          const isCustom = data.submissionType === 'custom'
+                          if ((isStandard && !showStandard) || (isCustom && !showCustom)) {
+                            return false
+                          }
+
+                          // Only include models that have data for Python domain
+                          const pythonData = data.python
+                          return pythonData && (pythonData.funcPass1 !== null || pythonData.secPass1 !== null)
+                        })
+                        .map(([agentName, data]) => {
+                          const domainData = data.python
+                          const funcPass1Score = domainData.funcPass1
+                          const secPass1Score = domainData.secPass1
+                          const hasAnyData = funcPass1Score !== null || secPass1Score !== null
+
+                          return {
+                            agentName: agentName,
+                            modelName: data.modelName,
+                            agentFramework: data.agentFramework,
+                            data: data,
+                            domainData: domainData,
+                            funcPass1Score,
+                            secPass1Score,
+                            hasAnyData,
+                            organization: data.organization
+                          }
+                        })
+
+                      // Sort by selected column and direction
+                      modelStats.sort((a, b) => {
+                        // First priority: models with any data (only for numeric columns)
+                        if (sortColumn === 'funcpass1' || sortColumn === 'secpass1') {
+                          if (a.hasAnyData && !b.hasAnyData) return -1
+                          if (!a.hasAnyData && b.hasAnyData) return 1
+                          if (!a.hasAnyData && !b.hasAnyData) return 0
+                        }
+
+                        let aValue, bValue
+                        let isStringSort = false
+
+                        if (sortColumn === 'funcpass1') {
+                          aValue = a.funcPass1Score
+                          bValue = b.funcPass1Score
+                        } else if (sortColumn === 'secpass1') {
+                          aValue = a.secPass1Score
+                          bValue = b.secPass1Score
+                        } else if (sortColumn === 'llmbackbone') {
+                          aValue = a.modelName || ''
+                          bValue = b.modelName || ''
+                          isStringSort = true
+                        } else if (sortColumn === 'agentframework') {
+                          aValue = a.agentFramework || ''
+                          bValue = b.agentFramework || ''
+                          isStringSort = true
+                        } else {
+                          // Default to funcPass1
+                          aValue = a.funcPass1Score
+                          bValue = b.funcPass1Score
+                        }
+
+                        // Handle null values (missing data) for numeric sorts
+                        if (!isStringSort) {
+                          if (aValue === null && bValue === null) return 0
+                          if (aValue === null) return 1
+                          if (bValue === null) return -1
+                        }
+
+                        const multiplier = sortDirection === 'desc' ? 1 : -1
+
+                        if (isStringSort) {
+                          // String sorting
+                          return aValue.localeCompare(bValue) * multiplier
+                        } else {
+                          // Numeric sorting
+                          return (bValue - aValue) * multiplier
+                        }
+                      })
+
+                      // Show empty state if no results after filtering
+                      if (modelStats.length === 0) {
+                        return (
+                          <tr className="empty-results-row">
+                            <td colSpan="8" className="empty-results-cell">
+                              <div className="empty-results-content">
+                                <span className="empty-icon">🔧</span>
+                                <span className="empty-text">
+                                  {showCustom && !showStandard
+                                    ? "No custom submissions yet. Be the first to submit results with a custom scaffold!"
+                                    : "No results match the current filters."}
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      }
+
+                      return modelStats.map((model, index) => (
+                        <tr key={model.agentName} className={`model-row ${index === 0 && model.hasAnyData && sortColumn === 'funcpass1' && sortDirection === 'desc' ? 'top-performer' : ''} ${model.data.isNew ? 'new-model' : ''}`}>
+                          {/* Rank */}
+                          <td className={`rank-cell ${index === 0 ? 'gold-medal' : index === 1 ? 'silver-medal' : index === 2 ? 'bronze-medal' : ''}`}>
+                            {index === 0 && model.hasAnyData ? (
+                              <span className="medal-icon">🥇</span>
+                            ) : index === 1 && model.hasAnyData ? (
+                              <span className="medal-icon">🥈</span>
+                            ) : index === 2 && model.hasAnyData ? (
+                              <span className="medal-icon">🥉</span>
+                            ) : (
+                              <span className="rank-number">#{index + 1}</span>
+                            )}
+                          </td>
+                          {/* Agent Name */}
+                          <td className="agent-name-info">
+                            <div
+                              className="agent-name clickable-model"
+                              onClick={() => handleModelClick(model.agentName)}
+                              title="Click to view submission details"
+                            >
+                              {model.agentName}
+                              {model.data.isNew && <span className="new-badge">NEW</span>}
+                              {!model.data.isVerified && (
+                                <span className="unverified-badge" title="Unverified submission - see details for more information">
+                                  ⚠️
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* LLM Backbone */}
+                          <td className="llm-backbone-info">
+                            {model.modelName ? (
+                              <span className="llm-backbone-name">{model.modelName}</span>
+                            ) : (
+                              <span className="no-data">—</span>
+                            )}
+                          </td>
+
+                          {/* Agent Framework */}
+                          <td className="agent-framework-info">
+                            {model.agentFramework ? (
+                              <span className="agent-framework-name">{model.agentFramework}</span>
+                            ) : (
+                              <span className="no-data">—</span>
+                            )}
+                          </td>
+
+                          {/* Organization */}
+                          <td className="organization-info">
+                            <div className="org-container">
+                              <div className="company-logo">
+                                {model.organization === 'Anthropic' && (
+                                  <img src={`${import.meta.env.BASE_URL}claude.png`} alt="Anthropic" className="logo-img" />
+                                )}
+                                {model.organization === 'OpenAI' && (
+                                  <img src={`${import.meta.env.BASE_URL}openai.svg`} alt="OpenAI" className="logo-img" />
+                                )}
+                                {model.organization === 'Sierra' && (
+                                  <img src={`${import.meta.env.BASE_URL}sierra-logo.png`} alt="Sierra" className="logo-img" />
+                                )}
+                                {model.organization === 'Moonshot AI' && (
+                                  <span className="emoji-logo">🚀</span>
+                                )}
+                                {model.organization === 'DeepSeek' && (
+                                  <img src={`${import.meta.env.BASE_URL}DeepSeek_logo_icon.png`} alt="DeepSeek" className="logo-img" />
+                                )}
+                                {(model.organization === 'Alibaba' || model.organization === 'Qwen') && (
+                                  <img src={`${import.meta.env.BASE_URL}qwen-color.png`} alt="Qwen" className="logo-img" />
+                                )}
+                                {model.organization === 'Google' && (
+                                  <img src={`${import.meta.env.BASE_URL}Google__G__logo.svg.png`} alt="Google" className="logo-img" />
+                                )}
+                                {model.organization === 'NVIDIA' && (
+                                  <img src={`${import.meta.env.BASE_URL}Logo-nvidia-transparent-PNG.png`} alt="NVIDIA" className="logo-img" />
+                                )}
+                              </div>
+                              <span className="org-name">{model.organization}</span>
+                            </div>
+                          </td>
+
+
+                          {/* FuncPass@1 */}
+                          <td className="metric-cell">
+                            {model.funcPass1Score !== null ? (
+                              <span className="metric-value">{model.funcPass1Score.toFixed(1)}%</span>
+                            ) : (
+                              <span className="no-data">No Data</span>
+                            )}
+                          </td>
+                          {/* SecPass@1 */}
+                          <td className="metric-cell">
+                            {model.secPass1Score !== null ? (
+                              <span className="metric-value">{model.secPass1Score.toFixed(1)}%</span>
+                            ) : (
+                              <span className="no-data">No Data</span>
+                            )}
+                          </td>
+
+                          {/* Average Cost */}
+                          <td className="cost-cell">
+                            {(() => {
+                              const domainCost = model.data.costs.python
+                              if (domainCost !== null && domainCost !== undefined) {
+                                return <span className="cost-value">${domainCost.toFixed(3)}</span>
+                              } else {
+                                return <span className="no-data">—</span>
+                              }
+                            })()}
+                          </td>
+                        </tr>
+                      ))
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+              <div className="verification-note">
+                <span className="note-icon">⚠️</span>
+                <span className="note-text">
+                  The warning icon indicates unverified submissions. Click on any model name to view full verification details.
+                </span>
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -1065,22 +1392,22 @@ const Leaderboard = () => {
         <div className="submissions-content">
           <h3>Submit Your Results</h3>
           <p>
-            Have new results to share? Submit your model evaluation results by creating a pull request to add your JSON submission file. 
+            Have new results to share? Submit your model evaluation results by creating a pull request to add your JSON submission file.
             See our submission guidelines for the required format and process.
           </p>
           <div className="submission-links">
-            <a 
-              href="https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/README.md" 
-              target="_blank" 
-              rel="noopener noreferrer" 
+            <a
+              href="https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/README.md"
+              target="_blank"
+              rel="noopener noreferrer"
               className="submissions-link primary"
             >
               View Submission Guidelines →
             </a>
-            <a 
-              href="https://github.com/LeiLiLab/susvibes-leaderboard/compare" 
-              target="_blank" 
-              rel="noopener noreferrer" 
+            <a
+              href="https://github.com/LeiLiLab/susvibes-leaderboard/compare"
+              target="_blank"
+              rel="noopener noreferrer"
               className="submissions-link secondary"
             >
               Submit via Pull Request →
@@ -1097,7 +1424,7 @@ const Leaderboard = () => {
               <h2>Submission Details</h2>
               <button className="modal-close" onClick={closeModal}>×</button>
             </div>
-            
+
             <div className="modal-body">
               <div className="submission-details">
                 {/* Basic Information */}
@@ -1169,9 +1496,9 @@ const Leaderboard = () => {
                               </span>
                             </span>
                           </div>
-                          <a 
-                            href={ref.url} 
-                            target="_blank" 
+                          <a
+                            href={ref.url}
+                            target="_blank"
                             rel="noopener noreferrer"
                             className="reference-link"
                           >
@@ -1195,16 +1522,16 @@ const Leaderboard = () => {
                             <div className="result-item">
                               <label>FuncPass@1:</label>
                               <span>
-                                {results.func_pass_1 !== null && results.func_pass_1 !== undefined 
-                                  ? `${results.func_pass_1.toFixed(1)}%` 
+                                {results.func_pass_1 !== null && results.func_pass_1 !== undefined
+                                  ? `${results.func_pass_1.toFixed(1)}%`
                                   : 'N/A'}
                               </span>
                             </div>
                             <div className="result-item">
                               <label>SecPass@1:</label>
                               <span>
-                                {results.sec_pass_1 !== null && results.sec_pass_1 !== undefined 
-                                  ? `${results.sec_pass_1.toFixed(1)}%` 
+                                {results.sec_pass_1 !== null && results.sec_pass_1 !== undefined
+                                  ? `${results.sec_pass_1.toFixed(1)}%`
                                   : 'N/A'}
                               </span>
                             </div>
@@ -1260,9 +1587,9 @@ const Leaderboard = () => {
                     <h3>Verification Status</h3>
                     <div className="verification-status">
                       <div className="verification-indicator">
-                        {selectedSubmission.trajectories_available && 
-                         selectedSubmission.methodology.verification.omitted_questions === false &&
-                         (selectedSubmission.submission_type === 'custom' || selectedSubmission.methodology.verification.modified_prompts === false) ? (
+                        {selectedSubmission.trajectories_available &&
+                          selectedSubmission.methodology.verification.omitted_questions === false &&
+                          (selectedSubmission.submission_type === 'custom' || selectedSubmission.methodology.verification.modified_prompts === false) ? (
                           <span className="verified">✅ Verified</span>
                         ) : (
                           <span className="unverified">⚠️ Unverified</span>
@@ -1276,15 +1603,15 @@ const Leaderboard = () => {
                         <div className="detail-item">
                           <label>Modified Prompts:</label>
                           <span>
-                            {selectedSubmission.methodology.verification.modified_prompts === true ? 'Yes' : 
-                             selectedSubmission.methodology.verification.modified_prompts === false ? 'No' : 'Unknown'}
+                            {selectedSubmission.methodology.verification.modified_prompts === true ? 'Yes' :
+                              selectedSubmission.methodology.verification.modified_prompts === false ? 'No' : 'Unknown'}
                           </span>
                         </div>
                         <div className="detail-item">
                           <label>Omitted Questions:</label>
                           <span>
-                            {selectedSubmission.methodology.verification.omitted_questions === true ? 'Yes' : 
-                             selectedSubmission.methodology.verification.omitted_questions === false ? 'No' : 'Unknown'}
+                            {selectedSubmission.methodology.verification.omitted_questions === true ? 'Yes' :
+                              selectedSubmission.methodology.verification.omitted_questions === false ? 'No' : 'Unknown'}
                           </span>
                         </div>
                         {selectedSubmission.methodology.verification.details && (

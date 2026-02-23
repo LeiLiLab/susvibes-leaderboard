@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import './App.css'
 import TrajectoryVisualizer from './components/TrajectoryVisualizer'
 import Leaderboard from './components/Leaderboard'
+import BlogContent from './components/BlogContent'
 
 function App() {
-  
+
   // Initialize currentView based on URL hash
   const getInitialView = () => {
     const hash = window.location.hash.slice(1) // Remove the '#'
@@ -17,7 +18,7 @@ function App() {
     }
     return 'home'
   }
-  
+
   const [currentView, setCurrentView] = useState(getInitialView())
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
@@ -136,15 +137,15 @@ function App() {
                     <span className="tau-symbol">SusVibes</span>
                   </h1>
                 </div>
-                
+
                 <div className="hero-image-section">
                   <img src={`${import.meta.env.BASE_URL}example.jpg`} alt="Sample SusVibes Tasks" className="trajectory-image" />
                 </div>
-                
+
                 <div className="hero-description-section">
                   <p className="hero-description">
-                  An agent is started inside a docker environment and tasked with adding a feature to an existing code base. 
-                  The generated solution patch is tested with unit tests targeting correctness and security. 
+                    An agent is started inside a docker environment and tasked with adding a feature to an existing code base.
+                    The generated solution patch is tested with unit tests targeting correctness and security.
                   </p>
                   <div className="hero-actions">
                     <div className="button-row">
@@ -169,45 +170,48 @@ function App() {
             </div>
           </section>
 
-      {/* News Section */}
-      <section className="news">
-        <div className="container">
-          <div className="news-block">
-            <div className="news-header">
-              <h3>Recent News</h3>
-            </div>
-            
-            <div className="news-content">
-              <div className="news-list">
-                <a href="https://github.com/LeiLiLab/susvibes-leaderboard" target="_blank" rel="noopener noreferrer" className="news-item">
-                  <div className="news-icon">🎉</div>
-                  <div className="news-text">
-                    <strong>SusVibes leaderboard released: Check whether your Vibe Coding agent is safe!</strong>
-                    <span>December 29, 2025</span>
+          {/* News Section */}
+          <section className="news">
+            <div className="container">
+              <div className="news-block">
+                <div className="news-header">
+                  <h3>Recent News</h3>
+                </div>
+
+                <div className="news-content">
+                  <div className="news-list">
+                    <a href="https://github.com/LeiLiLab/susvibes-leaderboard" target="_blank" rel="noopener noreferrer" className="news-item">
+                      <div className="news-icon">🎉</div>
+                      <div className="news-text">
+                        <strong>SusVibes leaderboard released: Check whether your Vibe Coding agent is safe!</strong>
+                        <span>December 29, 2025</span>
+                      </div>
+                      <div className="news-arrow">→</div>
+                    </a>
+                    <a href="https://github.com/LeiLiLab/susvibes" target="_blank" rel="noopener noreferrer" className="news-item">
+                      <div className="news-icon">📊</div>
+                      <div className="news-text">
+                        <strong>SusVibes benchmark released!</strong>
+                        <span>Dec 2, 2025</span>
+                      </div>
+                      <div className="news-arrow">→</div>
+                    </a>
+                    <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="news-item">
+                      <div className="news-icon">📝</div>
+                      <div className="news-text">
+                        <strong>Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks</strong>
+                        <span>Dec 2, 2025</span>
+                      </div>
+                      <div className="news-arrow">→</div>
+                    </a>
                   </div>
-                  <div className="news-arrow">→</div>
-                </a>
-                <a href="https://github.com/LeiLiLab/susvibes" target="_blank" rel="noopener noreferrer" className="news-item">
-                  <div className="news-icon">📊</div>
-                  <div className="news-text">
-                    <strong>SusVibes benchmark released!</strong>
-                    <span>Dec 2, 2025</span>
-                  </div>
-                  <div className="news-arrow">→</div>
-                </a>
-                <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="news-item">
-                  <div className="news-icon">📝</div>
-                  <div className="news-text">
-                    <strong>Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks</strong>
-                    <span>Dec 2, 2025</span>
-                  </div>
-                  <div className="news-arrow">→</div>
-                </a>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      </section>
+          </section>
+
+          {/* Blog Content (paper website) */}
+          <BlogContent />
 
         </>
       ) : currentView === 'leaderboard' ? (
@@ -222,11 +226,11 @@ function App() {
           <p>
             For questions or feedback, contact{' '}
             <a href="mailto:sz3296@columbia.edu" className="footer-email">
-            sz3296@columbia.edu
+              sz3296@columbia.edu
             </a>
             {' '}or{' '}
             <a href="mailto:danqingw@cs.cmu.edu" className="footer-email">
-            danqingw@cs.cmu.edu
+              danqingw@cs.cmu.edu
             </a>
           </p>
         </div>
