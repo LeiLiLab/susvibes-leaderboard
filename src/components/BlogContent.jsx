@@ -1135,16 +1135,6 @@ export default function BlogContent() {
 
       {/* ── BibTeX ───────────────────────────────────────────────── */}
       <BibtexSection />
-
-      {/* ── Blog Template Footer ─────────────────────────────────── */}
-      <div className="blog-template-footer">
-        <p>
-          This website is based on the{' '}
-          <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a>{' '}
-          template. Content adapted from the{' '}
-          <a href="https://arxiv.org/abs/2512.03262">SusVibes paper</a>.
-        </p>
-      </div>
     </div>
   )
 }

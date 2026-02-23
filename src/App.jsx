@@ -11,6 +11,7 @@ function App() {
     const hash = window.location.hash.slice(1) // Remove the '#'
     if (hash === 'leaderboard') return 'leaderboard'
     if (hash === 'trajectory-visualizer') return 'trajectory-visualizer'
+    if (hash === 'blog') return 'blog'
     // Redirect deprecated routes to home
     if (hash === 'results' || hash === 'docs') {
       window.history.replaceState(null, '', '#home')
@@ -32,6 +33,8 @@ function App() {
       window.history.pushState(null, '', '#leaderboard')
     } else if (view === 'trajectory-visualizer') {
       window.history.pushState(null, '', '#trajectory-visualizer')
+    } else if (view === 'blog') {
+      window.history.pushState(null, '', '#blog')
     }
   }
 
@@ -50,6 +53,8 @@ function App() {
         setCurrentView('leaderboard')
       } else if (hash === 'trajectory-visualizer') {
         setCurrentView('trajectory-visualizer')
+      } else if (hash === 'blog') {
+        setCurrentView('blog')
       } else if (hash === 'results' || hash === 'docs') {
         // Redirect deprecated routes to home
         window.history.replaceState(null, '', '#home')
@@ -108,6 +113,7 @@ function App() {
           </button>
           <div className={`nav-links ${mobileMenuOpen ? '' : 'mobile-hidden'}`}>
             <button onClick={() => navigateTo('home')} className={`nav-link ${currentView === 'home' ? 'active' : ''}`}>Overview</button>
+            <button onClick={() => navigateTo('blog')} className={`nav-link ${currentView === 'blog' ? 'active' : ''}`}>Blog</button>
             <button onClick={() => navigateTo('leaderboard')} className={`nav-link ${currentView === 'leaderboard' ? 'active' : ''}`}>Leaderboard</button>
             <button onClick={() => navigateTo('trajectory-visualizer')} className={`nav-link ${currentView === 'trajectory-visualizer' ? 'active' : ''}`}>Visualizer</button>
             <a href="https://github.com/LeiLiLab/susvibes-leaderboard" target="_blank" rel="noopener noreferrer" onClick={() => setMobileMenuOpen(false)}>GitHub</a>
@@ -118,9 +124,9 @@ function App() {
       {/* Update Notification */}
       <div className="update-notification">
         <div className="notification-container">
-          <span className="notification-badge">NEW</span>
+          <span className="notification-badge">SusVibes</span>
           <span className="notification-text">
-            SusVibes benchmark for evaluating Vibe Coding agents on real-world tasks with functional correctness and security metrics.
+             Evaluating Vibe Coding agents on real-world tasks with functional correctness and security metrics.
           </span>
         </div>
       </div>
@@ -128,8 +134,8 @@ function App() {
       {/* Conditional Content Rendering */}
       {currentView === 'home' ? (
         <>
-          {/* Hero Section */}
-          <section className="hero">
+          {/* Hero: title, then news (below title / above buttons), then image+description, then button-row */}
+          <section className="hero hero-with-news">
             <div className="hero-container-vertical">
               <div className="hero-content-vertical">
                 <div className="hero-title-section">
@@ -138,86 +144,115 @@ function App() {
                   </h1>
                 </div>
 
-                <div className="hero-image-section">
-                  <img src={`${import.meta.env.BASE_URL}example.jpg`} alt="Sample SusVibes Tasks" className="trajectory-image" />
-                </div>
-
-                <div className="hero-description-section">
-                  <p className="hero-description">
-                    An agent is started inside a docker environment and tasked with adding a feature to an existing code base.
-                    The generated solution patch is tested with unit tests targeting correctness and security.
-                  </p>
-                  <div className="hero-actions">
-                    <div className="button-row">
-                      <a href="https://github.com/LeiLiLab/susvibes" target="_blank" rel="noopener noreferrer">
-                        <button className="btn-primary">View on GitHub</button>
-                      </a>
-                      <button onClick={() => navigateTo('leaderboard')} className="btn-secondary">
-                        View Leaderboard
-                      </button>
-                      <a href="https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/README.md" target="_blank" rel="noopener noreferrer">
-                        <button className="btn-secondary">Submit Results</button>
-                      </a>
+                {/* Left: image + description + buttons. Right: Recent News */}
+                <div className="hero-news-row">
+                  <div className="hero-left-column">
+                    <div className="hero-image-section">
+                      <img src={`${import.meta.env.BASE_URL}example.jpg`} alt="Sample SusVibes Tasks" className="trajectory-image" />
                     </div>
-                    <div className="button-row">
-                      <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer">
-                        <button className="btn-secondary">Read Paper</button>
-                      </a>
+                    <div className="hero-description-section">
+                      {/* <p className="hero-description">
+                        An agent is started inside a docker environment and tasked with adding a feature to an existing code base.
+                        The generated solution patch is tested with unit tests targeting correctness and security.
+                      </p> */}
+                    </div>
+                    <div className="hero-actions">
+                      <div className="button-row">
+                        <a href="https://github.com/LeiLiLab/susvibes" target="_blank" rel="noopener noreferrer">
+                          <button className="btn-secondary">View on GitHub</button>
+                        </a>
+                        <button onClick={() => navigateTo('leaderboard')} className="btn-secondary">
+                          View Leaderboard
+                        </button>
+                        <a href="https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/README.md" target="_blank" rel="noopener noreferrer">
+                          <button className="btn-secondary">Submit Results</button>
+                        </a>
+                      </div>
+                      <div className="button-row">
+                        <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer">
+                          <button className="btn-secondary">Read Paper</button>
+                        </a>
+                      </div>
+                      <div className="button-row">
+                        <button onClick={() => navigateTo('blog')} className="btn-secondary">
+                          Read Blog Post
+                        </button>
+                      </div>
                     </div>
                   </div>
+                  <aside className="news-sidebar">
+                    <div className="news-block news-block-narrow">
+                      <div className="news-header">
+                        <h3>Recent News</h3>
+                      </div>
+                      <div className="news-content">
+                        <div className="news-list">
+                          <a href="#blog" className="news-item">
+                            <div className="news-icon">🔥</div>
+                            <div className="news-text">
+                              <strong>See our blog post with interactive visualization of the SusVibes benchmark!</strong>
+                              <span>Feb 23, 2026</span>
+                            </div>
+                            <div className="news-arrow">→</div>
+                          </a>
+                          <a href="#leaderboard" className="news-item">
+                            <div className="news-icon">🆕</div>
+                            <div className="news-text">
+                              <strong>Updated results for GLM 4.7 Flash on our SusVibes benchmark!</strong>
+                              <span>Feb 16, 2026</span>
+                            </div>
+                            <div className="news-arrow">→</div>
+                          </a>
+                          <a href="#leaderboard" className="news-item">
+                            <div className="news-icon">🆕</div>
+                            <div className="news-text">
+                              <strong>Updated results for Gemini 3.0 Pro and Gemini CLI on our SusVibes benchmark!</strong>
+                              <span>Feb 3, 2026</span>
+                            </div>
+                            <div className="news-arrow">→</div>
+                          </a>
+                          <a href="https://github.com/LeiLiLab/susvibes-leaderboard" target="_blank" rel="noopener noreferrer" className="news-item">
+                            <div className="news-icon">🎉</div>
+                            <div className="news-text">
+                              <strong>SusVibes leaderboard released: Check whether your Vibe Coding agent is safe!</strong>
+                              <span>December 29, 2025</span>
+                            </div>
+                            <div className="news-arrow">→</div>
+                          </a>
+                          <a href="https://github.com/LeiLiLab/susvibes" target="_blank" rel="noopener noreferrer" className="news-item">
+                            <div className="news-icon">📊</div>
+                            <div className="news-text">
+                              <strong>SusVibes benchmark released!</strong>
+                              <span>Dec 2, 2025</span>
+                            </div>
+                            <div className="news-arrow">→</div>
+                          </a>
+                          <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="news-item">
+                            <div className="news-icon">📝</div>
+                            <div className="news-text">
+                              <strong>Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks</strong>
+                              <span>Dec 2, 2025</span>
+                            </div>
+                            <div className="news-arrow">→</div>
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  </aside>
                 </div>
               </div>
             </div>
           </section>
-
-          {/* News Section */}
-          <section className="news">
-            <div className="container">
-              <div className="news-block">
-                <div className="news-header">
-                  <h3>Recent News</h3>
-                </div>
-
-                <div className="news-content">
-                  <div className="news-list">
-                    <a href="https://github.com/LeiLiLab/susvibes-leaderboard" target="_blank" rel="noopener noreferrer" className="news-item">
-                      <div className="news-icon">🎉</div>
-                      <div className="news-text">
-                        <strong>SusVibes leaderboard released: Check whether your Vibe Coding agent is safe!</strong>
-                        <span>December 29, 2025</span>
-                      </div>
-                      <div className="news-arrow">→</div>
-                    </a>
-                    <a href="https://github.com/LeiLiLab/susvibes" target="_blank" rel="noopener noreferrer" className="news-item">
-                      <div className="news-icon">📊</div>
-                      <div className="news-text">
-                        <strong>SusVibes benchmark released!</strong>
-                        <span>Dec 2, 2025</span>
-                      </div>
-                      <div className="news-arrow">→</div>
-                    </a>
-                    <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="news-item">
-                      <div className="news-icon">📝</div>
-                      <div className="news-text">
-                        <strong>Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks</strong>
-                        <span>Dec 2, 2025</span>
-                      </div>
-                      <div className="news-arrow">→</div>
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Blog Content (paper website) */}
-          <BlogContent />
 
         </>
       ) : currentView === 'leaderboard' ? (
         <Leaderboard />
       ) : currentView === 'trajectory-visualizer' ? (
         <TrajectoryVisualizer />
+      ) : currentView === 'blog' ? (
+        <div className="container blog-content-wrapper">
+          <BlogContent />
+        </div>
       ) : null}
 
       {/* Simple Footer */}
@@ -233,6 +268,19 @@ function App() {
               danqingw@cs.cmu.edu
             </a>
           </p>
+          {currentView === 'blog' && (
+            <p className="simple-footer-attribution">
+              This website is based on the{' '}
+              <a href="https://github.com/nerfies/nerfies.github.io" target="_blank" rel="noopener noreferrer" className="footer-email">
+                Nerfies
+              </a>{' '}
+              template. Blog content adapted from the{' '}
+              <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="footer-email">
+                SusVibes paper
+              </a>
+              .
+            </p>
+          )}
         </div>
       </footer>
 
