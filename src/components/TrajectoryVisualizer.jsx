@@ -753,6 +753,16 @@ const TrajectoryVisualizer = () => {
                           <div className="submission-meta">
                             <span className="submission-date">{submission.submission_date}</span>
                             {submission.is_new && <span className="new-badge">NEW</span>}
+                            {submission.submission_type === 'custom' && (
+                              <a
+                                href={`https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/public/submissions/${submission.submissionDir}/submission.json`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="custom-badge"
+                                title="Custom submission - click to view specs"
+                                onClick={(e) => e.stopPropagation()}
+                              >CUSTOM</a>
+                            )}
                             {!submission.hasTrajectories && <span className="no-trajectories-badge">No Trajectories</span>}
                           </div>
                           {!submission.hasTrajectories && (
