@@ -206,8 +206,11 @@ const Leaderboard = () => {
   const [pinnedTooltips, setPinnedTooltips] = useState([])
 
   // Helper function to create composite key from agent framework and model name
-  const createAgentName = (agentFramework, modelName) => {
+  const createAgentName = (agentFramework, modelName, submissionType, customLabel) => {
     const framework = agentFramework || 'unknown'
+    if (submissionType === 'custom' && customLabel) {
+      return `${modelName}::${framework}::custom-${customLabel}`
+    }
     return `${modelName}::${framework}`
   }
 
@@ -216,7 +219,8 @@ const Leaderboard = () => {
     const parts = agentName.split('::')
     return {
       modelName: parts[0],
-      agentFramework: parts[1] === 'unknown' ? null : parts[1]
+      agentFramework: parts[1] === 'unknown' ? null : parts[1],
+      customTag: parts[2] || null
     }
   }
 
@@ -268,9 +272,11 @@ const Leaderboard = () => {
 
           const submission = await response.json()
 
-          // Create composite key (agent name) from agent framework and model name
+          // Create composite key (agent name) from agent framework, model name, and custom label
           const agentFramework = submission.methodology?.agent_framework || null
-          const agentName = createAgentName(agentFramework, submission.model_name)
+          const submissionType = submission.submission_type || 'standard'
+          const customLabel = submission.custom_label || null
+          const agentName = createAgentName(agentFramework, submission.model_name, submissionType, customLabel)
 
           // Store full submission data for modal display
           fullSubmissions[agentName] = {
@@ -303,7 +309,11 @@ const Leaderboard = () => {
               (submission.submission_type === 'custom' || submission.methodology?.verification?.modified_prompts === false),
             verificationDetails: submission.methodology?.verification || null,
             // Submission type: 'standard' (default) or 'custom'
-            submissionType: submission.submission_type || 'standard'
+            submissionType: submission.submission_type || 'standard',
+            // For custom submissions, link to the submission.json in the leaderboard repo
+            customRefUrl: submissionType === 'custom'
+              ? `https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/public/submissions/${submissionDir}/submission.json`
+              : null
           }
 
           loadedData[agentName] = modelData
@@ -1280,8 +1290,22 @@ const Leaderboard = () => {
                               onClick={() => handleModelClick(model.agentName)}
                               title="Click to view submission details"
                             >
-                              {model.agentName}
+                              {model.agentName.replace(/::custom-.*$/, '')}
                               {model.data.isNew && <span className="new-badge">NEW</span>}
+                              {model.data.submissionType === 'custom' && (
+                                model.data.customRefUrl ? (
+                                  <a
+                                    href={model.data.customRefUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="custom-badge"
+                                    title="Custom submission - click to view specs"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >CUSTOM</a>
+                                ) : (
+                                  <span className="custom-badge">CUSTOM</span>
+                                )
+                              )}
                               {!model.data.isVerified && (
                                 <span className="unverified-badge" title="Unverified submission - see details for more information">
                                   ⚠️

@@ -27,25 +27,28 @@ Custom submissions **must** include detailed methodology documentation:
 
 1. **Set `submission_type` to `"custom"`** in your submission.json
 
-2. **Provide comprehensive `methodology.notes`** explaining:
+2. **Provide a `custom_label`** — a short, unique identifier for your approach (e.g., `"prompt-strategy"`, `"reflection"`, `"ensemble"`). This label is used in the directory name and leaderboard display. Must be lowercase alphanumeric with hyphens only (e.g., `multi-turn`).
+
+3. **Provide comprehensive `methodology.notes`** explaining:
    - What modifications were made to the standard scaffold
    - Why these modifications were made
    - How the custom system works at a high level
 
-3. **Link to your implementation** in the `references` array:
+4. **Link to your implementation** in the `references` array:
    - Include a GitHub link to your code/fork
    - Provide documentation or a blog post if available
 
-4. **Set `methodology.verification.modified_prompts` to `true`** if you modified any prompts
+5. **Set `methodology.verification.modified_prompts` to `true`** if you modified any prompts
 
 Example methodology section for a custom submission:
 ```json
 {
   "submission_type": "custom",
+  "custom_label": "prompt-strategy",
   "methodology": {
     "evaluation_date": "2025-12-29",
-    "susvibes_version": "0.2.0",
-    "notes": "This submission uses a multi-model router that selects between GPT-4 and Claude based on task complexity. We also added a custom reflection step after each tool call. See our GitHub repo for full implementation details.",
+    "susvibes_version": "v1.0",
+    "notes": "This submission uses an advanced prompting strategy and a custom reflection step after each tool call. See our GitHub repo for full implementation details.",
     "verification": {
       "modified_prompts": true,
       "omitted_questions": false,
@@ -89,20 +92,30 @@ If you omitted any tasks from your evaluation runs:
 
 ### Step 3: Create Your Submission Directory
 1. Navigate to the `public/submissions/` directory
-2. Create a new directory following the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}`
+2. Create a new directory following the naming convention:
+   - Standard: `{model-name}_{agent-framework}_default_{date}`
+   - Custom: `{model-name}_{agent-framework}_custom-{label}_{date}`
 3. Inside your submission directory, create:
    - `submission.json` - Your submission metadata (using schema defined in `public/submissions/schema.json`)
    - `trajectories/` directory - For your trajectory files
 
-**Important:** If you made any modifications to the standard SusVibes scaffold, set `"submission_type": "custom"` and provide detailed methodology documentation. See [Submission Types](#submission-types-standard-vs-custom) above.
+**Important:** If you made any modifications to the standard SusVibes scaffold, set `"submission_type": "custom"`, provide a `"custom_label"`, and include detailed methodology documentation. See [Submission Types](#submission-types-standard-vs-custom) above.
 
 Example directory structure:
 ```
-public/submissions/my-awesome-model_agent-framework_standard_2025-12-29/
+# Standard submission
+public/submissions/my-awesome-model_agent-framework_default_2025-12-29/
 ├── submission.json
 └── trajectories/
-    ├── my-awesome-model_agent-framework_standard_2025-12-29.trials.json
-    └── my-awesome-model_agent-framework_standard_2025-12-29.summary.json
+    ├── my-awesome-model_agent-framework_default_2025-12-29.trials.json
+    └── my-awesome-model_agent-framework_default_2025-12-29.summary.json
+
+# Custom submission
+public/submissions/my-awesome-model_agent-framework_custom-prompt-strategy_2025-12-29/
+├── submission.json
+└── trajectories/
+    ├── my-awesome-model_agent-framework_custom-prompt-strategy_2025-12-29.trials.json
+    └── my-awesome-model_agent-framework_custom-prompt-strategy_2025-12-29.summary.json
 ```
 
 ### Step 4: Add Your Trajectory Files
@@ -153,6 +166,7 @@ The leaderboard automatically loads all submissions listed in `public/submission
 - [ ] Manifest.json is updated
 - [ ] Contact info is provided
 - [ ] **`submission_type` is set correctly** (`"standard"` or `"custom"`)
+- [ ] **If custom:** `custom_label` is provided and matches directory name
 - [ ] **If custom:** detailed `methodology.notes` explaining modifications
 - [ ] **If custom:** `references` includes link to implementation/code
 - [ ] **If custom:** `methodology.verification.modified_prompts` is set appropriately
@@ -171,16 +185,21 @@ public/submissions/
 ├── README.md                           # Contributor guidelines
 ├── schema.json                         # JSON schema definition
 ├── manifest.json                       # List of active submissions
-├── model1_framework1_standard_date/    # Individual submission directory
-│   ├── submission.json                 # Submission metadata
-│   └── trajectories/                   # Trajectory files for this submission
-│       ├── model1_framework1_standard_2025-12-29.trials.json
-│       └── model1_framework1_standard_2025-12-29.summary.json
-├── model2_framework2_custom_date/      # Another submission
+├── model1_framework1_default_date/           # Standard submission
 │   ├── submission.json
 │   └── trajectories/
-│       ├── model2_framework2_custom_2025-12-29.trials.json
-│       └── model2_framework2_custom_2025-12-29.summary.json
+│       ├── model1_framework1_default_2025-12-29.trials.json
+│       └── model1_framework1_default_2025-12-29.summary.json
+├── model2_framework2_custom-prompt-strategy_date/     # Custom submission (label: prompt-strategy)
+│   ├── submission.json
+│   └── trajectories/
+│       ├── model2_framework2_custom-prompt-strategy_2025-12-29.trials.json
+│       └── model2_framework2_custom-prompt-strategy_2025-12-29.summary.json
+├── model2_framework2_custom-ensemble_date/   # Another custom (label: ensemble)
+│   ├── submission.json
+│   └── trajectories/
+│       ├── model2_framework2_custom-ensemble_2025-12-29.trials.json
+│       └── model2_framework2_custom-ensemble_2025-12-29.summary.json
 └── ...
 ```
 
