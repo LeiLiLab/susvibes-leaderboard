@@ -761,7 +761,7 @@ const TrajectoryVisualizer = () => {
                                 className="custom-badge"
                                 title="Custom submission - click to view specs"
                                 onClick={(e) => e.stopPropagation()}
-                              >CUSTOM</a>
+                              >{submission.custom_label || 'CUSTOM'}</a>
                             )}
                             {!submission.hasTrajectories && <span className="no-trajectories-badge">No Trajectories</span>}
                           </div>

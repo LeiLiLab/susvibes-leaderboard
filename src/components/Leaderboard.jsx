@@ -310,7 +310,8 @@ const Leaderboard = () => {
             verificationDetails: submission.methodology?.verification || null,
             // Submission type: 'standard' (default) or 'custom'
             submissionType: submission.submission_type || 'standard',
-            // For custom submissions, link to the submission.json in the leaderboard repo
+            // For custom submissions, store the label and link to the submission.json in the leaderboard repo
+            customLabel: customLabel || null,
             customRefUrl: submissionType === 'custom'
               ? `https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/public/submissions/${submissionDir}/submission.json`
               : null
@@ -1301,9 +1302,9 @@ const Leaderboard = () => {
                                     className="custom-badge"
                                     title="Custom submission - click to view specs"
                                     onClick={(e) => e.stopPropagation()}
-                                  >CUSTOM</a>
+                                  >{model.data.customLabel || 'CUSTOM'}</a>
                                 ) : (
-                                  <span className="custom-badge">CUSTOM</span>
+                                  <span className="custom-badge">{model.data.customLabel || 'CUSTOM'}</span>
                                 )
                               )}
                               {!model.data.isVerified && (
