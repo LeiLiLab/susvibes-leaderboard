@@ -353,69 +353,64 @@ const TrajectoryVisualizer = () => {
         let resultEvent = null
         
         item.trajectory?.forEach((event, eventIdx) => {
+          // Capture startTime from system events (they often carry the earliest timestamp)
           if (event.type === 'system') {
-            // Skip system events or handle them separately
             if (!startTime && event.timestamp) {
               startTime = new Date(event.timestamp).getTime()
             }
-            return
           }
-          
+
           if (event.type === 'result') {
-            // Store result event for later processing
             resultEvent = event
             if (event.duration_ms) {
               endTime = startTime ? startTime + event.duration_ms : null
             }
-            return
           }
-          
-          if (event.type === 'assistant' || event.type === 'user') {
-            const message = event.message || {}
-            const role = message.role || event.type
-            
-            // Extract content from message (excluding tool_use which is handled separately)
-            let content = ''
-            if (Array.isArray(message.content)) {
-              content = message.content
-                .filter(c => c.type !== 'tool_use') // Exclude tool_use, handled separately as tool_calls
-                .map(c => {
-                  if (typeof c === 'string') return c
-                  if (c.type === 'text') return c.text || ''
-                  if (c.type === 'tool_result') return c.content || ''
-                  return JSON.stringify(c)
-                })
-                .join('\n')
-            } else if (typeof message.content === 'string') {
-              content = message.content
+
+          const message = event.message || {}
+          const role = message.role || event.type
+
+          // Extract content from message (excluding tool_use which is handled separately)
+          let content = ''
+          if (Array.isArray(message.content)) {
+            content = message.content
+              .filter(c => c.type !== 'tool_use') // Exclude tool_use, handled separately as tool_calls
+              .map(c => {
+                if (typeof c === 'string') return c
+                if (c.type === 'text') return c.text || ''
+                if (c.type === 'tool_result') return c.content || ''
+                return JSON.stringify(c)
+              })
+              .join('\n')
+          } else if (typeof message.content === 'string') {
+            content = message.content
+          }
+
+          // Extract usage/cost information
+          const usage = message.usage || {}
+          const cost = message.cost || 0
+          totalCost += cost
+
+          // Extract timestamp
+          const timestamp = event.timestamp || new Date().toISOString()
+          if (!startTime) startTime = new Date(timestamp).getTime()
+          endTime = new Date(timestamp).getTime()
+
+          // Extract tool calls if present
+          const toolCalls = message.content?.filter(c => c.type === 'tool_use') || []
+
+          messages.push({
+            role,
+            content,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+            turn_idx: turnIdx++,
+            timestamp,
+            cost,
+            usage: {
+              prompt_tokens: usage.input_tokens || usage.prompt_tokens || 0,
+              completion_tokens: usage.output_tokens || usage.completion_tokens || 0
             }
-            
-            // Extract usage/cost information
-            const usage = message.usage || {}
-            const cost = message.cost || 0
-            totalCost += cost
-            
-            // Extract timestamp
-            const timestamp = event.timestamp || new Date().toISOString()
-            if (!startTime) startTime = new Date(timestamp).getTime()
-            endTime = new Date(timestamp).getTime()
-            
-            // Extract tool calls if present
-            const toolCalls = message.content?.filter(c => c.type === 'tool_use') || []
-            
-            messages.push({
-              role,
-              content,
-              tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-              turn_idx: turnIdx++,
-              timestamp,
-              cost,
-              usage: {
-                prompt_tokens: usage.input_tokens || usage.prompt_tokens || 0,
-                completion_tokens: usage.output_tokens || usage.completion_tokens || 0
-              }
-            })
-          }
+          })
         })
         
         // Extract information from result event
@@ -1231,7 +1226,7 @@ const TrajectoryVisualizer = () => {
                     >
                       <div className="message-header">
                         <span className="message-role">
-                          {message.role === 'assistant' ? '🤖 Agent' : message.role === 'tool' ? '🔧 Tool Output' : '👤 User'}
+                          {message.role === 'assistant' ? '🤖 Agent' : message.role === 'tool' ? '🔧 Tool Output' : message.role === 'system' ? '⚙️ System' : message.role === 'result' ? '📊 Result' : '👤 User'}
                         </span>
                         <span className="message-turn">Turn {message.turn}</span>
                         <span className="message-timestamp">{message.timestamp}</span>
