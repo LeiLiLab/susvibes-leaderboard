@@ -9,7 +9,8 @@ Each submission is stored in its own directory following the naming convention:
 
 ## How to Submit
 
-For detailed submission instructions, please refer to the [Submission Guide](../../SUBMISSION_GUIDE.md) in the root directory.
+- **[Submission Guide](../../docs/SUBMISSION_GUIDE.md)** — how to submit results via pull request.
+- **[Trajectory Format](../../docs/TRAJECTORY_FORMAT.md)** — the `submission.json` / `trials.json` / `summary.json` file format.
 
 ## Questions?
 
