@@ -75,7 +75,7 @@ We welcome community submissions! The leaderboard now accepts model evaluation r
   },
   "methodology": {
     "evaluation_date": "2025-01-10",
-    "susvibes_version": "v1.0",
+    "susvibes_version": "v0.0",
     "agent_framework": "My-Agent-Framework",
     "verification": {
       "modified_prompts": false,
@@ -98,36 +98,39 @@ The leaderboard now includes a verification system to ensure result quality:
 
 Each submission can include links to papers, documentation, and other resources about the model. This helps researchers access relevant information directly from the leaderboard. References are displayed in the model detail view with categorized badges for easy identification.
 
-📋 **See `SUBMISSION_GUIDE.md` for complete submission instructions**
+📋 **See [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) for complete submission instructions.**
+
+## 📚 Documentation
+
+| Doc | What it covers |
+|-----|----------------|
+| [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) | How to submit results via pull request (standard & custom). |
+| [docs/TRAJECTORY_FORMAT.md](docs/TRAJECTORY_FORMAT.md) | The trajectory / submission file format (the single source of truth). |
+| [converters/README.md](converters/README.md) | Tools that convert scaffold-native logs into the stored format. |
 
 ## 🔧 Development
 
 ### Project Structure
 ```
 src/
-├── components/          # React components
-│   ├── DocsContent.jsx     # Documentation content display
-│   ├── DocsContent.css     # Documentation styling
-│   ├── Leaderboard.jsx     # Model performance leaderboard
-│   ├── Leaderboard.css     # Leaderboard styling
-│   ├── Results.jsx         # Results dashboard
-│   ├── Results.css         # Results styling
-│   ├── TrajectoryVisualizer.jsx  # Trajectory exploration
-│   └── TrajectoryVisualizer.css  # Trajectory visualizer styling
-├── assets/             # Static assets and data
-│   ├── data/              # Research data and benchmark results
-│   ├── arXiv-2506.07982v1/  # Paper content and figures
-│   └── *.png, *.svg       # Logo images and icons
-├── App.jsx             # Main application component
-├── App.css             # Main application styling
-├── index.css           # Global styles
-└── main.jsx           # Application entry point
+├── components/                  # React components
+│   ├── Leaderboard.jsx          #   model performance leaderboard
+│   ├── TrajectoryVisualizer.jsx #   trajectory / dataset explorer
+│   ├── BlogContent.jsx          #   interactive paper/blog page
+│   └── ...                      #   Carousel, ExploitViewer, VulnerabilityGame, etc.
+├── assets/                      # logos, css
+├── App.jsx                      # app shell + hash routing (home/blog/leaderboard/visualizer)
+└── main.jsx                     # entry point
 
 public/
-├── data/               # CSV files and cost information
-├── task-data/          # Domain-specific tasks and policies
-├── trajectory-data/    # Model execution trajectories
-└── *.png, *.svg       # Public assets
+├── submissions/                 # all submissions (loaded via manifest.json)
+│   ├── manifest.json            #   list of displayed submission directories
+│   ├── schema.json              #   submission.json JSON schema
+│   └── <DIR>/                   #   submission.json + trajectories/
+└── datasets/                    # susvibes_dataset.jsonl
+
+converters/                      # scaffold-log → stored-format conversion tools (data tooling)
+docs/                            # SUBMISSION_GUIDE.md, TRAJECTORY_FORMAT.md
 ```
 
 ## License

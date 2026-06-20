@@ -10,6 +10,7 @@ const TrajectoryVisualizer = () => {
   
   // New state for view mode and task data
   const [viewMode, setViewMode] = useState('trajectories') // 'trajectories' or 'tasks'
+  const [datasetVersion, setDatasetVersion] = useState('v0.0') // temporary migration toggle, keyed off methodology.susvibes_version
   const [taskData, setTaskData] = useState(null)
   const [selectedTaskDetail, setSelectedTaskDetail] = useState(null)
   const [selectedDomain, setSelectedDomain] = useState(null)
@@ -285,13 +286,14 @@ const TrajectoryVisualizer = () => {
   }, [viewMode])
 
   // Transform trajectory data from file format to component format
-  const transformTrajectoryData = (rawData, instanceInfoMap = new Map(), summaryData = null) => {
+  const transformTrajectoryData = (rawData, instanceInfoMap = new Map(), summaryData = null, agentModel = null) => {
     // Check if data is already in the expected format (has simulations and tasks)
     if (rawData && Array.isArray(rawData.simulations) && Array.isArray(rawData.tasks)) {
       return rawData
     }
-    
-    // Transform from new format: array of {instance_id, model_patch, trajectory}
+
+    // Transform from format: array of {instance_id, model_patch, messages}
+    // where `messages` is an OpenAI-style messages list (role/content/tool_calls/tool_call_id)
     if (Array.isArray(rawData)) {
       const simulations = []
       const tasks = new Map()
@@ -299,28 +301,20 @@ const TrajectoryVisualizer = () => {
         num_trials: rawData.length,
         max_steps: null,
         max_errors: null,
-        seed: null
-      }
-      
-      // Extract agent and user info from first trajectory if available
-      const firstTrajectory = rawData[0]?.trajectory
-      if (firstTrajectory && firstTrajectory.length > 0) {
-        const systemEvent = firstTrajectory.find(ev => ev.type === 'system')
-        if (systemEvent) {
-          info.agent_info = {
-            implementation: systemEvent.model || 'unknown',
-            llm: systemEvent.model || 'unknown',
-            llm_args: {}
-          }
+        seed: null,
+        agent_info: {
+          implementation: agentModel || 'unknown',
+          llm: agentModel || 'unknown',
+          llm_args: {}
         }
       }
-      
+
       rawData.forEach((item, index) => {
         const instanceId = item.instance_id || `instance_${index}`
-        
+
         // Get instance information from dataset
         const instanceInfo = instanceInfoMap.get(instanceId) || {}
-        
+
         // Create a task entry
         if (!tasks.has(instanceId)) {
           tasks.set(instanceId, {
@@ -343,91 +337,79 @@ const TrajectoryVisualizer = () => {
             }
           })
         }
-        
-        // Transform trajectory events into messages
+
+        // Transform OpenAI messages into display messages
         const messages = []
         let turnIdx = 0
         let totalCost = 0
         let startTime = null
         let endTime = null
-        let resultEvent = null
-        
-        item.trajectory?.forEach((event, eventIdx) => {
-          if (event.type === 'system') {
-            // Skip system events or handle them separately
-            if (!startTime && event.timestamp) {
-              startTime = new Date(event.timestamp).getTime()
-            }
-            return
+
+        const sourceMessages = Array.isArray(item.messages) ? item.messages : []
+        sourceMessages.forEach((m) => {
+          const role = m.role || 'user'
+
+          // content is a plain string in OpenAI format; stringify anything unexpected
+          let content = ''
+          if (typeof m.content === 'string') {
+            content = m.content
+          } else if (m.content != null) {
+            content = JSON.stringify(m.content)
           }
-          
-          if (event.type === 'result') {
-            // Store result event for later processing
-            resultEvent = event
-            if (event.duration_ms) {
-              endTime = startTime ? startTime + event.duration_ms : null
+
+          // Optional display metadata (preserved as extra keys by the converter)
+          const usage = m.usage || {}
+          const cost = m.cost || 0
+          totalCost += cost
+
+          // Only use REAL timestamps for timing — never fabricate (a missing timestamp
+          // must not become "now", which produced bogus 0s / N/A durations).
+          const ts = (typeof m.timestamp === 'string') ? m.timestamp : null
+          if (ts) {
+            const t = new Date(ts).getTime()
+            if (!Number.isNaN(t)) {
+              if (startTime == null) startTime = t
+              endTime = t
             }
-            return
           }
-          
-          if (event.type === 'assistant' || event.type === 'user') {
-            const message = event.message || {}
-            const role = message.role || event.type
-            
-            // Extract content from message (excluding tool_use which is handled separately)
-            let content = ''
-            if (Array.isArray(message.content)) {
-              content = message.content
-                .filter(c => c.type !== 'tool_use') // Exclude tool_use, handled separately as tool_calls
-                .map(c => {
-                  if (typeof c === 'string') return c
-                  if (c.type === 'text') return c.text || ''
-                  if (c.type === 'tool_result') return c.content || ''
-                  return JSON.stringify(c)
-                })
-                .join('\n')
-            } else if (typeof message.content === 'string') {
-              content = message.content
+
+          const toolCalls = Array.isArray(m.tool_calls) ? m.tool_calls : []
+
+          messages.push({
+            role,
+            content,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+            turn_idx: turnIdx++,
+            timestamp: ts,
+            cost,
+            usage: {
+              prompt_tokens: usage.prompt_tokens || usage.input_tokens || 0,
+              completion_tokens: usage.completion_tokens || usage.output_tokens || 0
             }
-            
-            // Extract usage/cost information
-            const usage = message.usage || {}
-            const cost = message.cost || 0
-            totalCost += cost
-            
-            // Extract timestamp
-            const timestamp = event.timestamp || new Date().toISOString()
-            if (!startTime) startTime = new Date(timestamp).getTime()
-            endTime = new Date(timestamp).getTime()
-            
-            // Extract tool calls if present
-            const toolCalls = message.content?.filter(c => c.type === 'tool_use') || []
-            
-            messages.push({
-              role,
-              content,
-              tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-              turn_idx: turnIdx++,
-              timestamp,
-              cost,
-              usage: {
-                prompt_tokens: usage.input_tokens || usage.prompt_tokens || 0,
-                completion_tokens: usage.output_tokens || usage.completion_tokens || 0
-              }
-            })
-          }
+          })
         })
-        
-        // Extract information from result event
-        const duration = resultEvent?.duration_ms ? resultEvent.duration_ms / 1000 : (startTime && endTime ? (endTime - startTime) / 1000 : null)
-        const agentCost = resultEvent?.total_cost_usd || totalCost
-        const terminationReason = resultEvent?.is_error ? 'error' : (resultEvent?.subtype || 'completed')
-        const numTurns = resultEvent?.num_turns || messages.length
-        
+
+        // Run metadata is preserved at the instance level (from the original
+        // system / result events) since `result` is not an OpenAI message role.
+        const result = item.result || {}
+        const duration = result.duration_ms
+          ? result.duration_ms / 1000
+          : ((startTime != null && endTime != null && endTime > startTime) ? (endTime - startTime) / 1000 : null)
+        // Missing run-metadata is shown uniformly as "N/A" (null here), never
+        // fabricated into a $0.0000 / 0s that reads like a real measurement.
+        const agentCost = (typeof result.total_cost_usd === 'number')
+          ? result.total_cost_usd
+          : (totalCost > 0 ? totalCost : null)
+        const terminationReason = result.subtype || (result.is_error ? 'error' : null)
+
         // Check if instance is correct and/or correct_secure from summary data
-        const isCorrect = summaryData?.details?.correct?.includes(instanceId) || false
-        const isCorrectSecure = summaryData?.details?.correct_secure?.includes(instanceId) || false
-        
+        // New summary format nests pass lists under details.completed.{func_pass,sec_pass};
+        // fall back to the old details.{correct,correct_secure} for safety.
+        const funcPassList = summaryData?.details?.completed?.func_pass || summaryData?.details?.correct || []
+        const secPassList = summaryData?.details?.completed?.sec_pass || summaryData?.details?.correct_secure || []
+        const isCorrect = funcPassList.includes(instanceId)
+        const isCorrectSecure = secPassList.includes(instanceId)
+
         // Create simulation entry
         simulations.push({
           id: `${instanceId}_trial_1`,
@@ -435,9 +417,10 @@ const TrajectoryVisualizer = () => {
           trial: 1,
           messages,
           duration,
+          num_turns: (typeof result.num_turns === 'number') ? result.num_turns : null,
           reward_info: {
-            reward: 0, // Reward information not available in trajectory file format
-            nl_assertions: [], // NL assertions not available in trajectory file format
+            reward: 0, // Reward information not available in messages format
+            nl_assertions: [], // NL assertions not available in messages format
             correct: isCorrect,
             correct_secure: isCorrectSecure
           },
@@ -446,14 +429,14 @@ const TrajectoryVisualizer = () => {
           user_cost: 0
         })
       })
-      
+
       return {
         simulations,
         tasks: Array.from(tasks.values()),
         info
       }
     }
-    
+
     // Fallback: return data as-is if we can't transform it
     return rawData
   }
@@ -482,27 +465,27 @@ const TrajectoryVisualizer = () => {
 
       let rawData = await trajectoryResponse.json()
 
-      // Check if trajectory data is stored in separate files (new format)
-      // In new format, each item's trajectory field is a path string instead of an array
-      if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0].trajectory === 'string') {
-        // Load trajectory data from separate files
+      // Check if message data is stored in separate files (split format)
+      // In split format, each item's `messages` field is a path string instead of an array
+      if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0].messages === 'string') {
+        // Load messages data from separate files
         const loadedData = await Promise.all(
           rawData.map(async (item) => {
-            if (typeof item.trajectory === 'string') {
+            if (typeof item.messages === 'string') {
               try {
-                // trajectory is a relative path
-                const trajectoryFilePath = `${basePath}/${item.trajectory}`
-                const response = await fetch(trajectoryFilePath)
+                // messages is a relative path
+                const messagesFilePath = `${basePath}/${item.messages}`
+                const response = await fetch(messagesFilePath)
                 if (response.ok) {
-                  const trajectoryData = await response.json()
-                  return { ...item, trajectory: trajectoryData }
+                  const messagesData = await response.json()
+                  return { ...item, messages: messagesData }
                 } else {
-                  console.warn(`Failed to load trajectory file: ${item.trajectory}`)
-                  return { ...item, trajectory: [] }
+                  console.warn(`Failed to load messages file: ${item.messages}`)
+                  return { ...item, messages: [] }
                 }
               } catch (err) {
-                console.warn(`Error loading trajectory file ${item.trajectory}:`, err)
-                return { ...item, trajectory: [] }
+                console.warn(`Error loading messages file ${item.messages}:`, err)
+                return { ...item, messages: [] }
               }
             }
             return item
@@ -525,7 +508,7 @@ const TrajectoryVisualizer = () => {
       }
       
       // Transform the data to match the expected format, passing dataset info and summary info
-      const transformedData = transformTrajectoryData(rawData, datasetInfo, summaryData)
+      const transformedData = transformTrajectoryData(rawData, datasetInfo, summaryData, trajectoryInfo.model)
       
       setSelectedTrajectory(transformedData)
       setSelectedTask(null)
@@ -614,7 +597,7 @@ const TrajectoryVisualizer = () => {
       content,
       tool_calls,
       turn: turn_idx,
-      timestamp: new Date(timestamp).toLocaleString(),
+      timestamp: timestamp ? new Date(timestamp).toLocaleString() : '',
       cost: cost || 0,
       tokens: usage ? `${usage.prompt_tokens || 0}/${usage.completion_tokens || 0}` : 'N/A'
     }
@@ -712,6 +695,25 @@ const TrajectoryVisualizer = () => {
               📋 Tasks
             </button>
           </div>
+
+          {/* Dataset version toggle (temporary v0 -> v1 migration) */}
+          <div className="view-toggle dataset-version-toggle" role="group" aria-label="Dataset version">
+            {['v0.0', 'v1.0'].map(v => (
+              <button
+                key={v}
+                className={`toggle-btn ${datasetVersion === v ? 'active' : ''}`}
+                onClick={() => {
+                  setDatasetVersion(v)
+                  setSelectedSubmission(null)
+                  setAvailableTrajectories([])
+                  setSelectedTrajectory(null)
+                  setSelectedTask(null)
+                }}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="trajectory-grid">
@@ -738,8 +740,17 @@ const TrajectoryVisualizer = () => {
                         <p>No submissions available.</p>
                       </div>
                     )}
-                    
-                    {!submissionsLoading && submissions.map((submission, index) => {
+
+                    {!submissionsLoading && submissions.length > 0 &&
+                      submissions.filter(s => (s.methodology?.susvibes_version || 'v0.0') === datasetVersion).length === 0 && (
+                      <div className="empty-state">
+                        <p>No {datasetVersion} submissions yet.</p>
+                      </div>
+                    )}
+
+                    {!submissionsLoading && submissions
+                      .filter(submission => (submission.methodology?.susvibes_version || 'v0.0') === datasetVersion)
+                      .map((submission, index) => {
                       const agentName = createAgentName(submission.methodology?.agent_framework, submission.model_name)
                       return (
                       <div 
@@ -948,7 +959,8 @@ const TrajectoryVisualizer = () => {
                             <p><strong>CWE IDs:</strong> {task.description?.cwe_ids?.join(', ') || 'No CWE IDs available'}</p>
                             <p><strong>Correct:</strong> {simulation.reward_info?.correct ? '✅ Yes' : '❌ No'}</p>
                             <p><strong>Correct & Secure:</strong> {simulation.reward_info?.correct_secure ? '✅ Yes' : '❌ No'}</p>
-                            <p><strong>Termination:</strong> {simulation.termination_reason || 'Unknown'}</p>
+                            <p><strong>Termination:</strong> {simulation.termination_reason || 'N/A'}</p>
+                            <p><strong>Turns:</strong> {simulation.num_turns != null ? simulation.num_turns : 'N/A'}</p>
                           </div>
                           <div className="task-stats">
                             <span className="message-count">
@@ -1193,11 +1205,15 @@ const TrajectoryVisualizer = () => {
                       </div>
                       <div className="result-item">
                         <span className="result-label">Termination:</span>
-                        <span className="result-value">{selectedTask.termination_reason || 'Unknown'}</span>
+                        <span className="result-value">{selectedTask.termination_reason || 'N/A'}</span>
+                      </div>
+                      <div className="result-item">
+                        <span className="result-label">Turns:</span>
+                        <span className="result-value">{selectedTask.num_turns != null ? selectedTask.num_turns : 'N/A'}</span>
                       </div>
                       <div className="result-item">
                         <span className="result-label">Agent Cost:</span>
-                        <span className="result-value">${selectedTask.agent_cost?.toFixed(4) || 'N/A'}</span>
+                        <span className="result-value">{selectedTask.agent_cost != null ? `$${selectedTask.agent_cost.toFixed(4)}` : 'N/A'}</span>
                       </div>
                     
                     </div>
@@ -1231,7 +1247,7 @@ const TrajectoryVisualizer = () => {
                     >
                       <div className="message-header">
                         <span className="message-role">
-                          {message.role === 'assistant' ? '🤖 Agent' : message.role === 'tool' ? '🔧 Tool Output' : '👤 User'}
+                          {message.role === 'assistant' ? '🤖 Assistant' : message.role === 'tool' ? '🔧 Tool Output' : '👤 User'}
                         </span>
                         <span className="message-turn">Turn {message.turn}</span>
                         <span className="message-timestamp">{message.timestamp}</span>

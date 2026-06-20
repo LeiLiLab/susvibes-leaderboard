@@ -182,6 +182,10 @@ const Leaderboard = () => {
   // Info tooltip state
   const [showFilterInfo, setShowFilterInfo] = useState(false)
 
+  // Dataset version filter (temporary v0.0 -> v1.0 migration toggle), keyed off
+  // each submission's methodology.susvibes_version. Default 'v0.0'.
+  const [datasetVersion, setDatasetVersion] = useState('v0.0')
+
   // Add state for dynamically loaded data
   const [passKData, setPassKData] = useState({})
   const [fullSubmissionData, setFullSubmissionData] = useState({}) // Store full submission.json data
@@ -297,6 +301,7 @@ const Leaderboard = () => {
               python: submission.results.python?.cost || null
             },
             isNew: submission.is_new || false,
+            version: submission.methodology?.susvibes_version || 'v0.0',
             agentName: agentName,
             modelName: submission.model_name,
             agentFramework: agentFramework,
@@ -348,6 +353,9 @@ const Leaderboard = () => {
         const modelData = passKData[agentName]
         const domainData = modelData[domain]
 
+        // Only this dataset version
+        if ((modelData.version || 'v0.0') !== datasetVersion) return
+
         // Only include models/frameworks that have valid chart data
         if (domainData && domainData.funcPass1 !== null && domainData.secPass1 !== null) {
           const modelName = modelData.modelName || parseAgentName(agentName).modelName
@@ -360,11 +368,11 @@ const Leaderboard = () => {
       setAllModels(Array.from(models).sort())
       setAllFrameworks(Array.from(frameworks).sort())
 
-      // Initialize with all selected by default (only if currently empty)
-      setSelectedModels(prev => prev.size === 0 ? new Set(models) : prev)
-      setSelectedFrameworks(prev => prev.size === 0 ? new Set(frameworks) : prev)
+      // Select all of the current version by default (reset when version changes)
+      setSelectedModels(new Set(models))
+      setSelectedFrameworks(new Set(frameworks))
     }
-  }, [passKData, domain])
+  }, [passKData, domain, datasetVersion])
 
   // Initialize chart when leaderboard view is active and chart view is selected
   useEffect(() => {
@@ -378,7 +386,7 @@ const Leaderboard = () => {
         clearTimeout(timer)
       }
     }
-  }, [leaderboardView, domain, isLoading, passKData, showStandard, showCustom, selectedModels, selectedFrameworks]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [leaderboardView, domain, isLoading, passKData, showStandard, showCustom, selectedModels, selectedFrameworks, datasetVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draw point styles on legend canvases when legend data changes
   useEffect(() => {
@@ -534,6 +542,11 @@ const Leaderboard = () => {
       Object.keys(passKData).forEach(agentName => {
         const modelData = passKData[agentName]
         const domainData = modelData[domain]
+
+        // Filter by dataset version
+        if ((modelData.version || 'v0.0') !== datasetVersion) {
+          return
+        }
 
         // Filter by submission type
         const isStandard = modelData.submissionType === 'standard' || !modelData.submissionType
@@ -915,6 +928,28 @@ const Leaderboard = () => {
           </div>
         </div>
 
+        {/* Dataset version toggle (temporary v0 -> v1 migration) — matches the Table/Chart switch */}
+        <div className="view-toggle-switch dataset-version-toggle">
+          <div className="toggle-container">
+            <button
+              className={`toggle-option ${datasetVersion === 'v0.0' ? 'active' : ''}`}
+              onClick={() => setDatasetVersion('v0.0')}
+            >
+              v0.0
+            </button>
+            <button
+              className={`toggle-option ${datasetVersion === 'v1.0' ? 'active' : ''}`}
+              onClick={() => setDatasetVersion('v1.0')}
+            >
+              v1.0
+            </button>
+            <div
+              className="toggle-slider"
+              style={{ transform: datasetVersion === 'v1.0' ? 'translateX(100%)' : 'translateX(0%)' }}
+            />
+          </div>
+        </div>
+
         {/* Submission Type Filter */}
         <div className="submission-type-filter">
           <label className="checkbox-container">
@@ -1172,7 +1207,12 @@ const Leaderboard = () => {
                       // Calculate domain-specific scores for ranking
                       const modelStats = Object.entries(passKData)
                         .filter(([agentName, data]) => {
-                          // Filter by submission type first
+                          // Filter by dataset version first
+                          if ((data.version || 'v0.0') !== datasetVersion) {
+                            return false
+                          }
+
+                          // Filter by submission type
                           const isStandard = data.submissionType === 'standard' || !data.submissionType
                           const isCustom = data.submissionType === 'custom'
                           if ((isStandard && !showStandard) || (isCustom && !showCustom)) {
