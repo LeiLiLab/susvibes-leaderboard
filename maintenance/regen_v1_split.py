@@ -108,6 +108,7 @@ def main():
                 empty += 1
             recs.append({"instance_id": iid, "model_patch": patch, "model": model,
                          "run_metadata": swe.build_result(d.get("info", {}) or {}, d.get("trajectory", []) or []),
+                         "tools": swe.tools_from_traj(d),
                          "messages": f"messages/{iid}.json", "_messages": msgs, "_n": len(msgs)})
         ids = {r["instance_id"] for r in recs}
         assert ids == keep, f"{sub}: {len(ids)} != 186 (missing {len(keep - ids)})"
@@ -135,6 +136,7 @@ def main():
                 empty += 1
             recs.append({"instance_id": iid, "model_patch": patch, "model": model,
                          "run_metadata": oh.build_result(rec, hist, na),
+                         "tools": oh.extract_tools(hist),
                          "messages": f"messages/{iid}.json", "_messages": msgs, "_n": len(msgs)})
         ids = {r["instance_id"] for r in recs}
         assert ids == keep, f"{sub}: {len(ids)} != 186 (missing {len(keep - ids)})"

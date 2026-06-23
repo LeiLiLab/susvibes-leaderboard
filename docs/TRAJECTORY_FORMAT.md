@@ -37,6 +37,7 @@ A JSON array of per-instance records:
   "model_patch": "diff --git ...",           // the agent's predicted patch (unified diff)
   "model": "Gemini 3.1 Pro",                 // authoritative model name
   "run_metadata": { ... },                    // run metadata (below) — NOT a chat message
+  "tools": [ ... ],                           // OpenAI tool (function) schemas available to the agent
   "messages": [ ... ]                         // OpenAI messages (below); inline array OR a path
 }
 ```
@@ -47,6 +48,7 @@ A JSON array of per-instance records:
 | `model_patch` | string | Prediction patch (may be empty if the agent produced none). |
 | `model` | string | Authoritative model name (taken from `submission.json`'s `model_name`). |
 | `run_metadata` | object | Run metadata. Not part of `messages` (see below). |
+| `tools` | array | OpenAI tool (function) schemas available to the agent (see below). |
 | `messages` | array \| string | OpenAI messages **inline**, or a `"messages/<id>.json"` path (split format). |
 
 ### `messages` — OpenAI chat format
@@ -77,7 +79,31 @@ Rules:
   the rest, so the same file feeds both training and the visualizer.
 
 Inline `<DIR>.trials.json` files are directly loadable by ms-swift (it reads each
-record's `messages` key and ignores `instance_id`/`model_patch`/`model`/`run_metadata`).
+record's `messages` + `tools` keys and ignores `instance_id`/`model_patch`/`model`/`run_metadata`).
+
+### `tools` — available tool schemas
+
+The OpenAI tool/function definitions the agent had available for that instance — the
+companion to the `tool_calls` in `messages` (one says *what tools existed*, the other
+*what was actually called*). ms-swift uses it to build the agent/tool-calling prompt.
+
+```jsonc
+"tools": [
+  {"type": "function", "function": {
+    "name": "execute_bash",
+    "description": "Run a bash command ...",
+    "parameters": {                       // JSON Schema
+      "type": "object",
+      "properties": {"command": {"type": "string", "description": "..."}},
+      "required": ["command"]
+    }}}
+]
+```
+
+Source per scaffold: OpenHands stores it verbatim on the system event
+(`history[0].args.tools`); SWE-agent parses it from the `.traj`'s
+`replay_config.agent.tools.command_docs`. The list is the same for every instance of a
+run, but is stored per-record (the OpenAI / ms-swift convention).
 
 ### `run_metadata` — run metadata
 
