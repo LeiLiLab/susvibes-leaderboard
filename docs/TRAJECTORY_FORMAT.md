@@ -6,7 +6,7 @@ training exporters consume them. There is **one** stored format — OpenAI-style
 `messages` — described here.
 
 > Converting scaffold-native logs into this format is done by the tools in
-> [`converters/`](../converters/README.md).
+> [`maintenance/`](../maintenance/README.md).
 
 ---
 
@@ -18,7 +18,7 @@ public/submissions/<DIR>/
 └── trajectories/
     ├── <DIR>.trials.json               # per-instance records (this spec)
     ├── <DIR>.summary.json              # correctness summary (optional but recommended)
-    └── trials/                         # only for the "split" format
+    └── messages/                       # only for the "split" format
         └── <instance_id>.json
 ```
 
@@ -36,7 +36,7 @@ A JSON array of per-instance records:
   "instance_id": "django__django_<hash>",   // owner__repo_commitHash
   "model_patch": "diff --git ...",           // the agent's predicted patch (unified diff)
   "model": "Gemini 3.1 Pro",                 // authoritative model name
-  "result": { ... },                          // run metadata (below) — NOT a chat message
+  "run_metadata": { ... },                    // run metadata (below) — NOT a chat message
   "messages": [ ... ]                         // OpenAI messages (below); inline array OR a path
 }
 ```
@@ -46,8 +46,8 @@ A JSON array of per-instance records:
 | `instance_id` | string | Unique task id. |
 | `model_patch` | string | Prediction patch (may be empty if the agent produced none). |
 | `model` | string | Authoritative model name (taken from `submission.json`'s `model_name`). |
-| `result` | object | Run metadata. Not part of `messages` (see below). |
-| `messages` | array \| string | OpenAI messages **inline**, or a `"trials/<id>.json"` path (split format). |
+| `run_metadata` | object | Run metadata. Not part of `messages` (see below). |
+| `messages` | array \| string | OpenAI messages **inline**, or a `"messages/<id>.json"` path (split format). |
 
 ### `messages` — OpenAI chat format
 
@@ -77,17 +77,17 @@ Rules:
   the rest, so the same file feeds both training and the visualizer.
 
 Inline `<DIR>.trials.json` files are directly loadable by ms-swift (it reads each
-record's `messages` key and ignores `instance_id`/`model_patch`/`model`/`result`).
+record's `messages` key and ignores `instance_id`/`model_patch`/`model`/`run_metadata`).
 
-### `result` — run metadata
+### `run_metadata` — run metadata
 
-`result` is **not** an OpenAI role, so run metadata lives here, not in `messages`. It has
-a small **unified core** that every converter normalises and emits identically, plus
-optional **scaffold-specific extras** that each converter keeps as-is (not aligned across
-scaffolds, present only when that scaffold provides them).
+`run_metadata` is **not** an OpenAI role, so run metadata lives here, not in `messages`.
+It has a small **unified core** that every converter normalises and emits identically,
+plus optional **scaffold-specific extras** that each converter keeps as-is (not aligned
+across scaffolds, present only when that scaffold provides them).
 
 ```jsonc
-"result": {
+"run_metadata": {
   // --- unified core (always present, same meaning for every scaffold) ---
   "subtype": "completed",        // "completed" | "error" | "incomplete"
   "is_error": false,
@@ -130,19 +130,19 @@ The visualizer shows `subtype` as **Termination**, `num_turns` as **Turns**, and
 **Inline** — `messages` is the array, everything in one file:
 
 ```jsonc
-[ { "instance_id": "...", "model_patch": "...", "model": "...", "result": {...},
+[ { "instance_id": "...", "model_patch": "...", "model": "...", "run_metadata": {...},
     "messages": [ {"role": "assistant", ...}, {"role": "tool", ...} ] } ]
 ```
 
 **Split** — for large submissions, `messages` is a path; the referenced file holds the
-messages array:
+messages array. The SWE-agent and OpenHands converters both emit this layout:
 
 ```jsonc
 // <DIR>.trials.json
-[ { "instance_id": "...", "model_patch": "...", "model": "...", "result": {...},
-    "messages": "trials/<instance_id>.json" } ]
+[ { "instance_id": "...", "model_patch": "...", "model": "...", "run_metadata": {...},
+    "messages": "messages/<instance_id>.json" } ]
 
-// trajectories/trials/<instance_id>.json
+// trajectories/messages/<instance_id>.json
 [ {"role": "assistant", ...}, {"role": "tool", ...} ]
 ```
 

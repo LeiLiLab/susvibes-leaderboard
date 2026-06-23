@@ -121,7 +121,7 @@ public/submissions/my-awesome-model_agent-framework_custom-prompt-strategy_2025-
 ### Step 4: Add Your Trajectory Files
 1. Copy your evaluation summary file from SusVibes scaffold to your submission's `trajectories/` directory
 2. Follow the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}.summary.json`
-3. Add your agent trajectories for what you've evaluated. The required file format (records, OpenAI `messages`, `result` metadata, inline vs split, summary) is specified in **[TRAJECTORY_FORMAT.md](TRAJECTORY_FORMAT.md)**.
+3. Add your agent trajectories for what you've evaluated. The required file format (records, OpenAI `messages`, `run_metadata`, inline vs split, summary) is specified in **[TRAJECTORY_FORMAT.md](TRAJECTORY_FORMAT.md)**.
 4. Follow the naming convention: `{model-name}_{agent-framework}_{submission-type}_{date}.trials.json` 
 
 ### Step 5: Update the Manifest

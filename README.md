@@ -106,7 +106,7 @@ Each submission can include links to papers, documentation, and other resources 
 |-----|----------------|
 | [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) | How to submit results via pull request (standard & custom). |
 | [docs/TRAJECTORY_FORMAT.md](docs/TRAJECTORY_FORMAT.md) | The trajectory / submission file format (the single source of truth). |
-| [converters/README.md](converters/README.md) | Tools that convert scaffold-native logs into the stored format. |
+| [maintenance/README.md](maintenance/README.md) | Data migration & maintenance scripts for the submission data (scaffold→format converters live in the SusVibes eval harness). |
 
 ## 🔧 Development
 
@@ -129,7 +129,7 @@ public/
 │   └── <DIR>/                   #   submission.json + trajectories/
 └── datasets/                    # susvibes_dataset.jsonl
 
-converters/                      # scaffold-log → stored-format conversion tools (data tooling)
+maintenance/                      # submission-data migration & maintenance scripts
 docs/                            # SUBMISSION_GUIDE.md, TRAJECTORY_FORMAT.md
 ```
 

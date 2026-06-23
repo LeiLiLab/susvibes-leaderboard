@@ -389,9 +389,9 @@ const TrajectoryVisualizer = () => {
           })
         })
 
-        // Run metadata is preserved at the instance level (from the original
-        // system / result events) since `result` is not an OpenAI message role.
-        const result = item.result || {}
+        // Run metadata is preserved at the instance level (under `run_metadata`)
+        // since it is not an OpenAI message role.
+        const result = item.run_metadata || {}
         const duration = result.duration_ms
           ? result.duration_ms / 1000
           : ((startTime != null && endTime != null && endTime > startTime) ? (endTime - startTime) / 1000 : null)
