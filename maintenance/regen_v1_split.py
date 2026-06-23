@@ -89,8 +89,10 @@ def main():
     keep = {json.loads(l)["instance_id"] for l in open(DATASET)}
     assert len(keep) == 186
 
-    for sub, (src, model) in SWE.items():
+    for sub, (src, _label) in SWE.items():
         assert os.path.isdir(src), src
+        # model name is auto-detected from the run (run_batch.config.yaml), not the label
+        mnop = swe.model_from_run_config(src) or swe.model_from_dirname(src)
         preds = {}
         pj = os.path.join(src, "preds.json")
         if os.path.isfile(pj):
@@ -106,19 +108,19 @@ def main():
             patch = (d.get("info", {}) or {}).get("submission") or preds.get(iid, {}).get("model_patch", "") or ""
             if not patch.strip():
                 empty += 1
-            recs.append({"instance_id": iid, "model_patch": patch, "model": model,
+            recs.append({"instance_id": iid, "model_patch": patch, "model_name_or_path": mnop,
                          "run_metadata": swe.build_result(d.get("info", {}) or {}, d.get("trajectory", []) or []),
                          "tools": swe.tools_from_traj(d),
                          "messages": f"messages/{iid}.json", "_messages": msgs, "_n": len(msgs)})
         ids = {r["instance_id"] for r in recs}
         assert ids == keep, f"{sub}: {len(ids)} != 186 (missing {len(keep - ids)})"
         n = write_split(td, sub, recs)
-        print(f"{sub}: 186 trials, {n} msgs, empty_patch={empty}  [{model}]")
+        print(f"{sub}: 186 trials, {n} msgs, empty_patch={empty}  [{mnop}]")
 
-    for sub, (jsonl, model) in OHJOBS.items():
+    for sub, (jsonl, _label) in OHJOBS.items():
         assert os.path.isfile(jsonl), jsonl
         td = fresh_split_dir(sub)
-        recs, empty, seen = [], 0, set()
+        recs, empty, seen, mnop = [], 0, set(), "unknown"
         for line in open(jsonl, encoding="utf-8"):
             line = line.strip()
             if not line:
@@ -128,20 +130,22 @@ def main():
             if iid not in keep or iid in seen:
                 continue
             seen.add(iid)
+            # model name is auto-detected per record (metadata.llm_config.model)
+            mnop = (rec.get("metadata", {}).get("llm_config", {}).get("model") or "unknown")
             hist = rec.get("history", []) or []
             msgs = oh.history_to_messages(hist)
             na = sum(1 for m in msgs if m.get("role") == "assistant")
             patch = (rec.get("test_result") or {}).get("git_patch", "") or ""
             if not patch.strip():
                 empty += 1
-            recs.append({"instance_id": iid, "model_patch": patch, "model": model,
+            recs.append({"instance_id": iid, "model_patch": patch, "model_name_or_path": mnop,
                          "run_metadata": oh.build_result(rec, hist, na),
                          "tools": oh.extract_tools(hist),
                          "messages": f"messages/{iid}.json", "_messages": msgs, "_n": len(msgs)})
         ids = {r["instance_id"] for r in recs}
         assert ids == keep, f"{sub}: {len(ids)} != 186 (missing {len(keep - ids)})"
         n = write_split(td, sub, recs)
-        print(f"{sub}: 186 trials, {n} msgs, empty_patch={empty}  [{model}]")
+        print(f"{sub}: 186 trials, {n} msgs, empty_patch={empty}  [{mnop}]")
 
 
 if __name__ == "__main__":

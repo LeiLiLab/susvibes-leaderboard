@@ -92,7 +92,7 @@ def main():
                 with open(os.path.join(traj_dir, rel), "w", encoding="utf-8") as mf:
                     json.dump(messages, mf, ensure_ascii=False, indent=1)
                 index.append({"instance_id": iid, "model_patch": patch,
-                              "model": model, "run_metadata": result, "messages": rel})
+                              "model_name_or_path": model, "run_metadata": result, "messages": rel})
                 n_msgs += len(messages)
 
         ids = {r["instance_id"] for r in index}

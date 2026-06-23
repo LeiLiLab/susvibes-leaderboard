@@ -81,7 +81,7 @@ def convert_dir(in_dir, model, keep_ids):
         if conv.verify(history, messages):
             fails += 1
         trials.append({
-            "instance_id": iid, "model_patch": patch, "model": model,
+            "instance_id": iid, "model_patch": patch, "model_name_or_path": model,
             "run_metadata": conv.build_result(info, d.get("trajectory", []) or []),
             "messages": messages,
         })

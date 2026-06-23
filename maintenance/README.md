@@ -6,7 +6,7 @@ not trigger the GitHub Pages deploy. (The scaffold→format converters themselve
 the SusVibes eval harness, not here — see section (1) below.)
 
 Everything targets the canonical stored format — per-instance records of
-`{instance_id, model_patch, model, run_metadata, messages}` where `messages` is an OpenAI /
+`{instance_id, model_patch, model_name_or_path, run_metadata, tools, messages}` where `messages` is an OpenAI /
 ms-swift chat list — specified in **[../docs/TRAJECTORY_FORMAT.md](../docs/TRAJECTORY_FORMAT.md)**.
 
 ## Layout
@@ -33,7 +33,7 @@ a NEW submission's trajectories are produced.
 
 ```bash
 # in the eval harness; <raw> is the run dir of <instance>/<instance>.traj subfolders
-python3 evaluation_harness/swe_agent/convert.py --input-dir <raw> [--output <dir>] [--model NAME]
+python3 evaluation_harness/swe_agent/convert.py --input_dir <run dir> [--output_dir <dir>]
 ```
 
 Each converter reads the full per-instance history so nothing is dropped, fills

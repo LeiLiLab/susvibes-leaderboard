@@ -35,7 +35,7 @@ A JSON array of per-instance records:
 {
   "instance_id": "django__django_<hash>",   // owner__repo_commitHash
   "model_patch": "diff --git ...",           // the agent's predicted patch (unified diff)
-  "model": "Gemini 3.1 Pro",                 // authoritative model name
+  "model_name_or_path": "gemini/gemini-3-pro-preview",  // model id parsed from the run
   "run_metadata": { ... },                    // run metadata (below) — NOT a chat message
   "tools": [ ... ],                           // OpenAI tool (function) schemas available to the agent
   "messages": [ ... ]                         // OpenAI messages (below); inline array OR a path
@@ -46,7 +46,7 @@ A JSON array of per-instance records:
 |-------|------|-------|
 | `instance_id` | string | Unique task id. |
 | `model_patch` | string | Prediction patch (may be empty if the agent produced none). |
-| `model` | string | Authoritative model name (taken from `submission.json`'s `model_name`). |
+| `model_name_or_path` | string | Model id parsed from the run by the converter (litellm id, e.g. `bedrock/zai.glm-5`). Stored metadata — the leaderboard display name comes from `submission.json`'s `model_name`, not this field. |
 | `run_metadata` | object | Run metadata. Not part of `messages` (see below). |
 | `tools` | array | OpenAI tool (function) schemas available to the agent (see below). |
 | `messages` | array \| string | OpenAI messages **inline**, or a `"messages/<id>.json"` path (split format). |
@@ -79,7 +79,7 @@ Rules:
   the rest, so the same file feeds both training and the visualizer.
 
 Inline `<DIR>.trials.json` files are directly loadable by ms-swift (it reads each
-record's `messages` + `tools` keys and ignores `instance_id`/`model_patch`/`model`/`run_metadata`).
+record's `messages` + `tools` keys and ignores `instance_id`/`model_patch`/`model_name_or_path`/`run_metadata`).
 
 ### `tools` — available tool schemas
 
@@ -156,7 +156,7 @@ The visualizer shows `subtype` as **Termination**, `num_turns` as **Turns**, and
 **Inline** — `messages` is the array, everything in one file:
 
 ```jsonc
-[ { "instance_id": "...", "model_patch": "...", "model": "...", "run_metadata": {...},
+[ { "instance_id": "...", "model_patch": "...", "model_name_or_path": "...", "run_metadata": {...},
     "messages": [ {"role": "assistant", ...}, {"role": "tool", ...} ] } ]
 ```
 
@@ -165,7 +165,7 @@ messages array. The SWE-agent and OpenHands converters both emit this layout:
 
 ```jsonc
 // <DIR>.trials.json
-[ { "instance_id": "...", "model_patch": "...", "model": "...", "run_metadata": {...},
+[ { "instance_id": "...", "model_patch": "...", "model_name_or_path": "...", "run_metadata": {...},
     "messages": "messages/<instance_id>.json" } ]
 
 // trajectories/messages/<instance_id>.json
