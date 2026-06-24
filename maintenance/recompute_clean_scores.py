@@ -1,27 +1,28 @@
 """
-Recompute clean leaderboard scores after reward-hack trajectories were removed.
+Recompute leaderboard scores with reward-hack instances counted as FAILURES.
 
-Source of truth is the (already-trimmed) summary.json `details` arrays, NOT the previously
-displayed score. Cheated instances are excluded from BOTH numerator and denominator:
+Reward-hack trajectories were removed from each submission's numerator (the
+`details.completed.{func_pass,sec_pass}` arrays were trimmed by extract_reward_hacks.py)
+but are KEPT in the denominator: the score divides by the full candidate set
+(`num_candidates`), so reward hacking lowers the score instead of being scored away.
 
-    clean_func = |correct \\ cheated|       / (num_dataset - |cheated|)
-    clean_sec  = |correct_secure \\ cheated| / (num_dataset - |cheated|)
+    func_pass_1 = |details.completed.func_pass| / num_candidates
+    sec_pass_1  = |details.completed.sec_pass|  / num_candidates
 
-`details.correct` / `details.correct_secure` were already trimmed of cheated ids by
-extract_reward_hacks.py, so |correct \\ cheated| is just their current length.
-
-Writes results.python.{func_pass_1, sec_pass_1} in each affected submission.json and
-updates the summary ratios + a `num_reward_hacks_removed` provenance field.
+The source of truth is each submission's summary.json (already trimmed), so this is
+independent of any live verdict file. Writes results.python.{func_pass_1, sec_pass_1} in
+every submission.json; run sync_summary_metrics.py afterwards to mirror the ratios (and the
+reward-hack provenance) into the summaries.
 
 Usage:
-    python maintenance/recompute_clean_scores.py [--verdicts PATH] [--dry-run]
+    python maintenance/recompute_clean_scores.py [--submissions-dir DIR] [--dry-run]
 """
 
 import argparse
+import glob
 import json
 import os
 import sys
-from collections import defaultdict
 
 
 def _load(p):
@@ -37,56 +38,48 @@ def _dump(p, o):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
-    ap.add_argument("--verdicts",
-                    default="/home/songwenzhao/susvibes-hack-detection/outputs/agent_verdicts.json")
     ap.add_argument("--submissions-dir",
                     default=os.path.join(here, "..", "public", "submissions"))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     sub_root = os.path.abspath(args.submissions_dir)
-    results = _load(args.verdicts)["results"]
-    cheated = defaultdict(int)
-    for e in results:
-        if e.get("is_violation") is True:
-            cheated[e["submission"]] += 1
-
-    print(f"{'submission':<58}{'old f/s':>14}{'  clean f/s':>14}{'  denom':>8}")
-    for sub in sorted(cheated):
-        n_cheat = cheated[sub]
-        sub_json = os.path.join(sub_root, sub, "submission.json")
-        summ = os.path.join(sub_root, sub, "trajectories", f"{sub}.summary.json")
-        if not (os.path.isfile(sub_json) and os.path.isfile(summ)):
-            print(f"  {sub:<56} SKIP (missing file)")
+    print(f"{'submission':<58}{'old f/s':>14}{'  new f/s':>14}{'  denom':>8}")
+    n_done = n_changed = 0
+    for summ in sorted(glob.glob(os.path.join(sub_root, "*", "trajectories", "*.summary.json"))):
+        sub_dir = os.path.basename(os.path.dirname(os.path.dirname(summ)))
+        sub_json = os.path.join(sub_root, sub_dir, "submission.json")
+        if not os.path.isfile(sub_json):
             continue
 
         s = _load(summ)
-        det = s.get("details", {})
-        comp = det.get("completed", {})
-        N = s.get("num_candidates", s.get("num_dataset_instances", 200))
-        denom = N - n_cheat
-        # new format: details.completed.{func_pass,sec_pass}; fall back to legacy keys
-        n_correct = len(comp.get("func_pass", det.get("correct", [])))
-        n_secure = len(comp.get("sec_pass", det.get("correct_secure", [])))
-        clean_f = round(n_correct / denom * 100, 1) if denom else None
-        clean_s = round(n_secure / denom * 100, 1) if denom else None
+        comp = s.get("details", {}).get("completed", {}) or {}
+        N = s.get("num_candidates", s.get("num_dataset_instances"))
+        if not N:
+            print(f"  {sub_dir:<56} SKIP (no num_candidates)")
+            continue
+        n_correct = len(comp.get("func_pass", []))
+        n_secure = len(comp.get("sec_pass", []))
+        new_f = round(n_correct / N * 100, 1)
+        new_s = round(n_secure / N * 100, 1)
 
         sj = _load(sub_json)
-        old = sj["results"]["python"]
-        of, os_ = old.get("func_pass_1"), old.get("sec_pass_1")
-        print(f"  {sub:<58}{str(of)+'/'+str(os_):>14}{str(clean_f)+'/'+str(clean_s):>14}{denom:>8}")
+        score = sj.setdefault("results", {}).setdefault("python", {})
+        of, os_ = score.get("func_pass_1"), score.get("sec_pass_1")
+        changed = (of != new_f or os_ != new_s)
+        n_changed += changed
+        flag = "  <-- changed" if changed else ""
+        print(f"  {sub_dir:<58}{str(of)+'/'+str(os_):>14}{str(new_f)+'/'+str(new_s):>14}{N:>8}{flag}")
 
-        if args.dry_run:
-            continue
+        if not args.dry_run:
+            score["func_pass_1"] = new_f
+            score["sec_pass_1"] = new_s
+            _dump(sub_json, sj)
+        n_done += 1
 
-        old["func_pass_1"] = clean_f
-        old["sec_pass_1"] = clean_s
-        _dump(sub_json, sj)
-        # NOTE: summary.func_pass/sec_pass + reward_hack_removed are written by
-        # sync_summary_metrics.py (run it after this), so they stay in sync with the score.
-
-    print("\n(dry run — nothing written)" if args.dry_run else
-          "\nWrote clean scores to submission.json. Run sync_summary_metrics.py to update summaries.")
+    print(f"\n{'DRY-RUN ' if args.dry_run else ''}recomputed {n_done} submissions ({n_changed} changed).")
+    if not args.dry_run:
+        print("Run sync_summary_metrics.py to mirror the scores into the summaries.")
     return 0
 
 
