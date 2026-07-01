@@ -183,8 +183,8 @@ const Leaderboard = () => {
   const [showFilterInfo, setShowFilterInfo] = useState(false)
 
   // Dataset version filter (temporary v0.0 -> v1.0 migration toggle), keyed off
-  // each submission's methodology.susvibes_version. Default 'v0.0'.
-  const [datasetVersion, setDatasetVersion] = useState('v0.0')
+  // each submission's methodology.susvibes_version. Default 'v1.0'.
+  const [datasetVersion, setDatasetVersion] = useState('v1.0')
 
   // Add state for dynamically loaded data
   const [passKData, setPassKData] = useState({})
