@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import './TrajectoryVisualizer.css'
+import PillSelect from './PillSelect'
+import { sortVersionsDesc } from '../utils/version'
 
 const TrajectoryVisualizer = () => {
   const [selectedTrajectory, setSelectedTrajectory] = useState(null)
@@ -10,7 +12,8 @@ const TrajectoryVisualizer = () => {
   
   // New state for view mode and task data
   const [viewMode, setViewMode] = useState('trajectories') // 'trajectories' or 'tasks'
-  const [datasetVersion, setDatasetVersion] = useState('v0.0') // temporary migration toggle, keyed off methodology.susvibes_version
+  // null until a version is chosen; effectiveVersion falls back to the latest present.
+  const [datasetVersion, setDatasetVersion] = useState(null)
   const [taskData, setTaskData] = useState(null)
   const [selectedTaskDetail, setSelectedTaskDetail] = useState(null)
   const [selectedDomain, setSelectedDomain] = useState(null)
@@ -20,16 +23,22 @@ const TrajectoryVisualizer = () => {
   const [selectedSubmission, setSelectedSubmission] = useState(null)
   const [availableTrajectories, setAvailableTrajectories] = useState([])
   const [submissionsLoading, setSubmissionsLoading] = useState(false)
-  
+
+  // Dataset versions present in the submissions, newest first; selection falls back to latest.
+  const availableVersions = useMemo(
+    () => sortVersionsDesc([...new Set(submissions.map(s => s.methodology?.susvibes_version || 'v0.0'))]),
+    [submissions]
+  )
+  const effectiveVersion = datasetVersion ?? availableVersions[0] ?? 'v1.0'
+
+  // Each dataset version has its own file (v0.0 and v1.0 are different task sets).
+  const datasetUrl = (version) => `${import.meta.env.BASE_URL}datasets/susvibes_dataset_${version}.jsonl`
+
   // State for dataset information lookup
   const [datasetInfo, setDatasetInfo] = useState(new Map())
   
   // State for summary information (correct/correct_secure)
   const [summaryInfo, setSummaryInfo] = useState(null)
-
-  // Modal state for configuration display
-  const [showConfigModal, setShowConfigModal] = useState(false)
-  const [modalClosing, setModalClosing] = useState(false)
   
   // State for simulation grid pagination
   const [simulationsPerPage, setSimulationsPerPage] = useState(50)
@@ -45,14 +54,6 @@ const TrajectoryVisualizer = () => {
     return `${modelName}::${framework}`
   }
 
-  // Handle modal close with animation
-  const handleCloseModal = () => {
-    setModalClosing(true)
-    setTimeout(() => {
-      setShowConfigModal(false)
-      setModalClosing(false)
-    }, 300) // Match the CSS animation duration
-  }
 
   // Check if a submission has any trajectory files
   const checkSubmissionHasTrajectories = async (submission) => {
@@ -236,13 +237,13 @@ const TrajectoryVisualizer = () => {
 
   // Available domains for task exploration
   const domains = [
-    { name: 'Python', id: 'python', color: '#e2e8f0' }
+    { name: 'Python', id: 'python' }
   ]
 
   // Load dataset information
   const loadDatasetInfo = async () => {
     try {
-      const response = await fetch(`${import.meta.env.BASE_URL}datasets/susvibes_dataset.jsonl`)
+      const response = await fetch(datasetUrl(effectiveVersion))
       if (!response.ok) {
         console.warn('Failed to load dataset info')
         return
@@ -281,9 +282,15 @@ const TrajectoryVisualizer = () => {
   useEffect(() => {
     if (viewMode === 'trajectories') {
       loadSubmissions()
+    }
+  }, [viewMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Instance-info lookup depends on the dataset version (v0.0 / v1.0 differ).
+  useEffect(() => {
+    if (viewMode === 'trajectories') {
       loadDatasetInfo()
     }
-  }, [viewMode])
+  }, [viewMode, effectiveVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Transform trajectory data from file format to component format
   const transformTrajectoryData = (rawData, instanceInfoMap = new Map(), summaryData = null, agentModel = null) => {
@@ -529,7 +536,7 @@ const TrajectoryVisualizer = () => {
       setError(null)
       
       // Load instances from the dataset file
-      const datasetResponse = await fetch(`${import.meta.env.BASE_URL}datasets/susvibes_dataset.jsonl`)
+      const datasetResponse = await fetch(datasetUrl(effectiveVersion))
       
       if (!datasetResponse.ok) {
         throw new Error(`Failed to load dataset: ${datasetResponse.statusText}`)
@@ -621,37 +628,12 @@ const TrajectoryVisualizer = () => {
     }
   }
 
-  const getCleanTaskId = (taskId) => {
-    if (!taskId) return 'Unknown'
-    
-    // If it's a simple numeric or short string, return as is
-    if (/^\d+$/.test(taskId) || taskId.length < 10) {
-      return taskId
-    }
-    
-    // For complex telecom task IDs like [mobile_data_issue]data_mode_off|data_usage_exceeded[PERSONA:None]
-    // Extract the main issue type from brackets
-    const bracketMatch = taskId.match(/\[([^\]]+)\]/)
-    if (bracketMatch) {
-      const issueType = bracketMatch[1]
-      // Convert snake_case to readable format
-      return issueType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-    }
-    
-    // Fallback: just return the first part before any special characters
-    const cleaned = taskId.split('_')[0]
-    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
-  }
-
-  const getDomainColor = (domain) => {
-    const colors = {
-      airline: '#C41230',
-      telecom: '#059669',
-      retail: '#8b5cf6',
-      python: '#e2e8f0',
-      Python: '#e2e8f0'
-    }
-    return colors[domain] || '#e2e8f0'
+  // SWE instance ids look like "<owner>__<repo>_<commit>" (project is "<owner>/<repo>").
+  // Show the repo name — the part after the slash / the "__" — not the owner, un-capitalized.
+  const getRepoName = (instanceId) => {
+    if (!instanceId) return 'Unknown'
+    const s = String(instanceId)
+    return s.includes('__') ? s.split('__')[1].split('_')[0] : s.split('_')[0]
   }
 
   return (
@@ -663,56 +645,63 @@ const TrajectoryVisualizer = () => {
             or examine the underlying task definitions that drive these conversations in Python code generation tasks.
           </p>
           
-          {/* View Mode Toggle */}
-          <div className="view-toggle">
-            <button 
-              className={`toggle-btn ${viewMode === 'trajectories' ? 'active' : ''}`}
-              onClick={() => {
-                setViewMode('trajectories')
-                setTaskData(null)
-                setSelectedTaskDetail(null)
-                setSelectedDomain(null)
+          {/* View mode + version toggles — match the Leaderboard Table/Chart switch */}
+          <div className="visualizer-toggles">
+            <div className="view-toggle-switch">
+              <div className="toggle-container">
+                <button
+                  className={`toggle-option ${viewMode === 'trajectories' ? 'active' : ''}`}
+                  onClick={() => {
+                    setViewMode('trajectories')
+                    setTaskData(null)
+                    setSelectedTaskDetail(null)
+                    setSelectedDomain(null)
+                    setSelectedSubmission(null)
+                    setAvailableTrajectories([])
+                    setSelectedTrajectory(null)
+                    setSelectedTask(null)
+                  }}
+                >
+                  🔄 Trajectories
+                </button>
+                <button
+                  className={`toggle-option ${viewMode === 'tasks' ? 'active' : ''}`}
+                  onClick={() => {
+                    setViewMode('tasks')
+                    setSelectedTrajectory(null)
+                    setSelectedTask(null)
+                    setSelectedFile(null)
+                    setSelectedDomain(null)
+                    setTaskData(null)
+                    setSelectedTaskDetail(null)
+                  }}
+                >
+                  📋 Tasks
+                </button>
+                <div
+                  className="toggle-slider"
+                  style={{ transform: viewMode === 'tasks' ? 'translateX(100%)' : 'translateX(0%)' }}
+                />
+              </div>
+            </div>
+
+            {/* Dataset version selector — scales to any number of versions */}
+            <PillSelect
+              label="Version"
+              options={availableVersions}
+              value={effectiveVersion}
+              onChange={(v) => {
+                setDatasetVersion(v)
                 setSelectedSubmission(null)
                 setAvailableTrajectories([])
                 setSelectedTrajectory(null)
                 setSelectedTask(null)
-              }}
-            >
-              🔄 Trajectories
-            </button>
-            <button 
-              className={`toggle-btn ${viewMode === 'tasks' ? 'active' : ''}`}
-              onClick={() => {
-                setViewMode('tasks')
-                setSelectedTrajectory(null)
-                setSelectedTask(null)
-                setSelectedFile(null)
+                // Tasks flow reads a version-specific dataset — reset so it reloads.
                 setSelectedDomain(null)
                 setTaskData(null)
                 setSelectedTaskDetail(null)
               }}
-            >
-              📋 Tasks
-            </button>
-          </div>
-
-          {/* Dataset version toggle (temporary v0 -> v1 migration) */}
-          <div className="view-toggle dataset-version-toggle" role="group" aria-label="Dataset version">
-            {['v0.0', 'v1.0'].map(v => (
-              <button
-                key={v}
-                className={`toggle-btn ${datasetVersion === v ? 'active' : ''}`}
-                onClick={() => {
-                  setDatasetVersion(v)
-                  setSelectedSubmission(null)
-                  setAvailableTrajectories([])
-                  setSelectedTrajectory(null)
-                  setSelectedTask(null)
-                }}
-              >
-                {v}
-              </button>
-            ))}
+            />
           </div>
         </div>
 
@@ -742,14 +731,14 @@ const TrajectoryVisualizer = () => {
                     )}
 
                     {!submissionsLoading && submissions.length > 0 &&
-                      submissions.filter(s => (s.methodology?.susvibes_version || 'v0.0') === datasetVersion).length === 0 && (
+                      submissions.filter(s => (s.methodology?.susvibes_version || 'v0.0') === effectiveVersion).length === 0 && (
                       <div className="empty-state">
-                        <p>No {datasetVersion} submissions yet.</p>
+                        <p>No {effectiveVersion} submissions yet.</p>
                       </div>
                     )}
 
                     {!submissionsLoading && submissions
-                      .filter(submission => (submission.methodology?.susvibes_version || 'v0.0') === datasetVersion)
+                      .filter(submission => (submission.methodology?.susvibes_version || 'v0.0') === effectiveVersion)
                       .map((submission, index) => {
                       const agentName = createAgentName(submission.methodology?.agent_framework, submission.model_name)
                       return (
@@ -808,44 +797,28 @@ const TrajectoryVisualizer = () => {
 
                     <h3>{createAgentName(selectedSubmission.methodology?.agent_framework, selectedSubmission.model_name)} Trajectories</h3>
                     <p className="selection-description">
-                      {availableTrajectories.length > 0 
-                        ? `Found ${availableTrajectories.length} trajectory file${availableTrajectories.length === 1 ? '' : 's'}. Select a domain to explore conversation details:`
-                        : 'Loading trajectory information...'
+                      {availableTrajectories.length > 0
+                        ? 'Select a domain to view its trials:'
+                        : 'Loading trials…'
                       }
                     </p>
                     
                     {availableTrajectories.length === 0 && !loading && (
                       <div className="empty-state">
                         <h4>No Trajectories Available</h4>
-                        <p>This submission doesn't have any trajectory files for the standard domains (Airline, Retail, Telecom).</p>
-                        <p>This could mean:</p>
-                        <ul style={{ textAlign: 'left', marginTop: '0.5rem' }}>
-                          <li>The evaluation is still in progress</li>
-                          <li>The trajectory files use a different naming convention</li>
-                          <li>The submission only contains performance results</li>
-                        </ul>
+                        <p>This submission doesn't include any trajectory files to explore.</p>
                       </div>
                     )}
                     
-                    <div className="trajectory-list">
+                    <div className="domain-select-list">
                       {availableTrajectories.map((traj, index) => (
-                        <div 
+                        <button
                           key={`${traj.submissionDir}-${traj.file}-${index}`}
-                          className={`trajectory-item ${selectedFile === traj.file ? 'selected' : ''}`}
+                          className={`domain-badge domain-badge--selectable ${selectedFile === traj.file ? 'is-selected' : ''}`}
                           onClick={() => loadTrajectoryData(traj)}
                         >
-                          <div className="trajectory-info">
-                            <div className="trajectory-title">{traj.domain}</div>
-                            <div className="trajectory-meta">
-                              <span 
-                                className="domain-badge" 
-                                style={{ backgroundColor: getDomainColor(traj.domain) }}
-                              >
-                                {traj.domain}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
+                          🐍 {traj.domain}
+                        </button>
                       ))}
                     </div>
                   </>
@@ -858,25 +831,15 @@ const TrajectoryVisualizer = () => {
                   Select a domain to explore task definitions and agent policies:
                 </p>
                 
-                <div className="domain-list">
+                <div className="domain-select-list">
                   {domains.map((domain) => (
-                    <div 
+                    <button
                       key={domain.id}
-                      className={`domain-item ${selectedDomain === domain.id ? 'selected' : ''}`}
+                      className={`domain-badge domain-badge--selectable ${selectedDomain === domain.id ? 'is-selected' : ''}`}
                       onClick={() => loadTaskData(domain.id)}
                     >
-                      <div className="domain-info">
-                        <div className="domain-title">{domain.name}</div>
-                        <div className="domain-meta">
-                          <span 
-                            className="domain-badge" 
-                            style={{ backgroundColor: domain.color }}
-                          >
-                            {domain.name}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+                      🐍 {domain.name}
+                    </button>
                   ))}
                 </div>
               </>
@@ -918,17 +881,8 @@ const TrajectoryVisualizer = () => {
             {/* Trajectory View Content */}
             {viewMode === 'trajectories' && selectedTrajectory && !selectedTask && (
               <div className="task-selection">
-                <div className="task-selection-header">
-                  <h3>Available Simulations</h3>
-                  <button 
-                    className="config-button"
-                    onClick={() => setShowConfigModal(true)}
-                    title="View reproduction configuration"
-                  >
-                    ⚙️ Configuration
-                  </button>
-                </div>
-                <p>This trajectory contains {selectedTrajectory.simulations?.length || 0} simulations across {selectedTrajectory.tasks?.length || 0} tasks. Select a simulation to view the conversation:</p>
+                <h3>Available Trials</h3>
+                <p>This trajectory contains {selectedTrajectory.simulations?.length || 0} trials across {selectedTrajectory.tasks?.length || 0} tasks. Select a trial to view the conversation:</p>
                 
                 <div className="task-grid">
                   {(() => {
@@ -951,7 +905,7 @@ const TrajectoryVisualizer = () => {
                           }}
                         >
                           <div className="task-header">
-                            <span className="task-id">Task {getCleanTaskId(simulation.task_id)} - Trial {simulation.trial}</span>
+                            <span className="task-id">Task {getRepoName(simulation.task_id)} - Trial {simulation.trial}</span>
                             <span className="task-domain" data-domain={domain}>{domain}</span>
                           </div>
                           <div className="task-description">
@@ -992,31 +946,15 @@ const TrajectoryVisualizer = () => {
                       borderRadius: '8px',
                       border: '1px solid #e0e0e0'
                     }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <label style={{ fontSize: '0.9rem', fontWeight: '500' }}>Per page:</label>
-                        <select
-                          className="pagination-select"
-                          value={simulationsPerPage}
-                          onChange={(e) => {
-                            setSimulationsPerPage(Number(e.target.value))
-                            setSimulationPage(1)
-                          }}
-                          style={{
-                            padding: '0.5rem',
-                            borderRadius: '4px',
-                            border: 'none',
-                            backgroundColor: 'white',
-                            fontSize: '0.9rem',
-                            color: '#333',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          <option value={25}>25</option>
-                          <option value={50}>50</option>
-                          <option value={100}>100</option>
-                          <option value={200}>200</option>
-                        </select>
-                      </div>
+                      <PillSelect
+                        label="Per page"
+                        options={[25, 50, 100, 200]}
+                        value={simulationsPerPage}
+                        onChange={(v) => {
+                          setSimulationsPerPage(v)
+                          setSimulationPage(1)
+                        }}
+                      />
                       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <span style={{ fontSize: '0.9rem', color: '#666' }}>
                           Showing {(simulationPage - 1) * simulationsPerPage + 1} - {Math.min(simulationPage * simulationsPerPage, totalSims)} of {totalSims} simulations
@@ -1075,8 +1013,8 @@ const TrajectoryVisualizer = () => {
             {/* Task View Content */}
             {viewMode === 'tasks' && taskData && !selectedTaskDetail && (
               <div className="task-overview">
-                <h3>{taskData.domain.charAt(0).toUpperCase() + taskData.domain.slice(1)} Domain Instances</h3>
-                <p>This domain contains {taskData.tasks?.length || 0} instances. Select an instance to view its details:</p>
+                <h3>{taskData.domain.charAt(0).toUpperCase() + taskData.domain.slice(1)} Domain Tasks</h3>
+                <p>This domain contains {taskData.tasks?.length || 0} tasks. Select a task to view its details:</p>
                 
                 <div className="task-grid">
                   {taskData.tasks?.map((task, index) => (
@@ -1086,30 +1024,30 @@ const TrajectoryVisualizer = () => {
                       onClick={() => setSelectedTaskDetail(task)}
                     >
                       <div className="task-header">
-                        <span className="task-id">Instance: {getCleanTaskId(task.description?.InstanceID || task.id)}</span>
+                        <span className="task-id">Task: {getRepoName(task.description?.InstanceID || task.id)}</span>
                         <span className="task-domain" data-domain={taskData.domain}>{taskData.domain}</span>
                       </div>
                       <div className="task-description">
                         <p><strong>Project:</strong> {task.description?.project || 'No project available'}</p>
-                        <p><strong>CWE IDs:</strong> {task.description?.cwe_ids?.join(', ') || 'No CWE IDs available'}</p>
-                        <p><strong>CVE ID:</strong> {task.description?.cve_id || 'No CVE ID available'}</p>
+                        <p><strong>Vulnerability type:</strong> {task.description?.cwe_ids?.join(', ') || 'No CWE IDs available'}</p>
+                        <p><strong>Security issue identifier:</strong> {task.description?.cve_id || 'No CVE ID available'}</p>
                         <p><strong>Image Name:</strong> {task.description?.image_name ? (
                           <span style={{ fontSize: '0.85rem', wordBreak: 'break-all' }}>{task.description.image_name}</span>
                         ) : 'No image name available'}</p>
                       </div>
                       <div className="task-stats">
                         <span className="info-page">
-                          {task.description?.info_page ? (
-                            <a 
-                              href={task.description.info_page} 
-                              target="_blank" 
+                          {task.description?.cve_id ? (
+                            <a
+                              href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${task.description.cve_id}`}
+                              target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
-                              style={{ color: '#C41230', textDecoration: 'underline' }}
+                              style={{ color: 'var(--brand)', textDecoration: 'underline' }}
                             >
-                              View Info Page
+                              View CVE page
                             </a>
-                          ) : 'No info page'}
+                          ) : 'No CVE page'}
                         </span>
                       </div>
                     </div>
@@ -1130,9 +1068,9 @@ const TrajectoryVisualizer = () => {
                         setCurrentPage(1) // Reset pagination when going back
                       }}
                     >
-                      ← Back to Simulations
+                      ← Back to Trials
                     </button>
-                    <h3>Task {getCleanTaskId(selectedTask.task_id)} - Trial {selectedTask.trial} Conversation</h3>
+                    <h3>Task {getRepoName(selectedTask.task_id)} - Trial {selectedTask.trial} Conversation</h3>
                     <div className="conversation-stats">
                       <span>Total Messages: {selectedTask.messages?.length || 0}</span>
                       <span>Duration: {selectedTask.duration ? `${Math.round(selectedTask.duration)}s` : 'N/A'}</span>
@@ -1142,48 +1080,34 @@ const TrajectoryVisualizer = () => {
                   </div>
                   
                   <div className="task-context">
-                    <h4>Task Context</h4>
+                    <h4>Task Information</h4>
                     {(() => {
                       const task = selectedTrajectory.tasks?.find(t => t.id === selectedTask.task_id) || {}
                       const desc = task.description || {}
                       return (
                         <>
                           <p><strong>Instance ID:</strong> {desc.InstanceID || 'N/A'}</p>
-                          <p><strong>Image Name:</strong> {desc.image_name || 'N/A'}</p>
                           <p><strong>Project:</strong> {desc.project || 'N/A'}</p>
-                          <p><strong>CWE IDs:</strong> {desc.cwe_ids && desc.cwe_ids.length > 0 ? desc.cwe_ids.join(', ') : 'N/A'}</p>
-                          <p><strong>CVE ID:</strong> {desc.cve_id ? (
-                            <a href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${desc.cve_id}`} target="_blank" rel="noopener noreferrer">
-                              {desc.cve_id}
-                            </a>
-                          ) : 'N/A'}</p>
-                          <p><strong>Info Page:</strong> {desc.info_page ? (
+                          <p><strong>GitHub vulnerability fix commit page:</strong> {desc.info_page ? (
                             <a href={desc.info_page} target="_blank" rel="noopener noreferrer">
                               {desc.info_page}
                             </a>
                           ) : 'N/A'}</p>
-                          {desc.problem_statement && (
-                            <div style={{ marginTop: '1rem' }}>
-                              <p><strong>Problem Statement:</strong></p>
-                              <div style={{ 
-                                backgroundColor: '#f5f5f5', 
-                                padding: '1rem', 
-                                borderRadius: '4px',
-                                whiteSpace: 'pre-wrap',
-                                maxHeight: '400px',
-                                overflowY: 'auto'
-                              }}>
-                                {desc.problem_statement}
-                              </div>
-                            </div>
-                          )}
+                          <p><strong>Security issue identifier:</strong> {desc.cve_id ? (
+                            <a href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${desc.cve_id}`} target="_blank" rel="noopener noreferrer">
+                              {desc.cve_id}
+                            </a>
+                          ) : 'N/A'}</p>
+                          <p><strong>Vulnerability type:</strong> {desc.cwe_ids && desc.cwe_ids.length > 0 ? desc.cwe_ids.join(', ') : 'N/A'}</p>
+                          <p><strong>Language:</strong> {task.user_scenario?.instructions?.domain || 'Python'}</p>
+                          <p><strong>Docker image:</strong> {desc.image_name || 'N/A'}</p>
                         </>
                       )
                     })()}
                   </div>
                   
                   <div className="simulation-results">
-                    <h4>Simulation Results</h4>
+                    <h4>Trial Results</h4>
                     <div className="results-grid">
                       <div className="result-item">
                         <span className="result-label">Correct:</span>
@@ -1288,32 +1212,15 @@ const TrajectoryVisualizer = () => {
                         borderRadius: '8px',
                         border: '1px solid #e0e0e0'
                       }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <label htmlFor="messages-per-page" style={{ fontSize: '0.9rem', fontWeight: '500' }}>Messages per page:</label>
-                          <select
-                            className="pagination-select"
-                            id="messages-per-page"
-                            value={messagesPerPage}
-                            onChange={(e) => {
-                              setMessagesPerPage(Number(e.target.value))
-                              setCurrentPage(1) // Reset to first page when changing page size
-                            }}
-                            style={{
-                              padding: '0.5rem',
-                              borderRadius: '4px',
-                              border: 'none',
-                              backgroundColor: 'white',
-                              fontSize: '0.9rem',
-                              color: '#333',
-                              cursor: 'pointer'
-                            }}
-                          >
-                            <option value={25}>25</option>
-                            <option value={50}>50</option>
-                            <option value={100}>100</option>
-                            <option value={200}>200</option>
-                          </select>
-                        </div>
+                        <PillSelect
+                          label="Messages per page"
+                          options={[25, 50, 100, 200]}
+                          value={messagesPerPage}
+                          onChange={(v) => {
+                            setMessagesPerPage(v)
+                            setCurrentPage(1) // Reset to first page when changing page size
+                          }}
+                        />
                         
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                           <span style={{ fontSize: '0.9rem', color: '#666' }}>
@@ -1401,38 +1308,32 @@ const TrajectoryVisualizer = () => {
                     className="back-button"
                     onClick={() => setSelectedTaskDetail(null)}
                   >
-                    ← Back to Instances
+                    ← Back to Tasks
                   </button>
-                  <h3>Instance {getCleanTaskId(selectedTaskDetail.description?.InstanceID || selectedTaskDetail.id)} Details</h3>
+                  <h3>Task {getRepoName(selectedTaskDetail.description?.InstanceID || selectedTaskDetail.id)} Details</h3>
                 </div>
 
                 <div className="task-detail-content">
                   <div className="task-section">
-                    <h4>Instance Information</h4>
+                    <h4>Task Information</h4>
                     <div className="task-info">
                       <p><strong>Instance ID:</strong> {selectedTaskDetail.description?.InstanceID || selectedTaskDetail.id || 'N/A'}</p>
                       <p><strong>Project:</strong> {selectedTaskDetail.description?.project || 'N/A'}</p>
-                      <p><strong>Image Name:</strong> {selectedTaskDetail.description?.image_name || 'N/A'}</p>
-                      <p><strong>CWE IDs:</strong> {selectedTaskDetail.description?.cwe_ids && selectedTaskDetail.description.cwe_ids.length > 0 
-                        ? selectedTaskDetail.description.cwe_ids.join(', ') 
-                        : 'N/A'}</p>
-                      <p><strong>CVE ID:</strong> {selectedTaskDetail.description?.cve_id ? (
-                        <a href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${selectedTaskDetail.description.cve_id}`} target="_blank" rel="noopener noreferrer">
-                          {selectedTaskDetail.description.cve_id}
-                        </a>
-                      ) : 'N/A'}</p>
-                      <p><strong>Info Page:</strong> {selectedTaskDetail.description?.info_page ? (
+                      <p><strong>GitHub vulnerability fix commit page:</strong> {selectedTaskDetail.description?.info_page ? (
                         <a href={selectedTaskDetail.description.info_page} target="_blank" rel="noopener noreferrer">
                           {selectedTaskDetail.description.info_page}
                         </a>
                       ) : 'N/A'}</p>
+                      <p><strong>Security issue identifier:</strong> {selectedTaskDetail.description?.cve_id ? (
+                        <a href={`https://cve.mitre.org/cgi-bin/cvename.cgi?name=${selectedTaskDetail.description.cve_id}`} target="_blank" rel="noopener noreferrer">
+                          {selectedTaskDetail.description.cve_id}
+                        </a>
+                      ) : 'N/A'}</p>
+                      <p><strong>Vulnerability type:</strong> {selectedTaskDetail.description?.cwe_ids && selectedTaskDetail.description.cwe_ids.length > 0
+                        ? selectedTaskDetail.description.cwe_ids.join(', ')
+                        : 'N/A'}</p>
                       <p><strong>Language:</strong> {selectedTaskDetail._instanceData?.language || selectedTaskDetail.user_scenario?.instructions?.domain || 'Python'}</p>
-                      {selectedTaskDetail._instanceData?.base_commit && (
-                        <p><strong>Base Commit:</strong> <code>{selectedTaskDetail._instanceData.base_commit}</code></p>
-                      )}
-                      {selectedTaskDetail._instanceData?.created_at && (
-                        <p><strong>Created At:</strong> {new Date(selectedTaskDetail._instanceData.created_at).toLocaleString()}</p>
-                      )}
+                      <p><strong>Docker image:</strong> {selectedTaskDetail.description?.image_name || 'N/A'}</p>
                     </div>
                   </div>
 
@@ -1440,10 +1341,10 @@ const TrajectoryVisualizer = () => {
                     <div className="task-section">
                       <h4>Problem Statement</h4>
                       <div className="task-info">
-                        <div style={{ 
-                          backgroundColor: '#f5f5f5', 
-                          padding: '1rem', 
-                          borderRadius: '4px',
+                        <div style={{
+                          backgroundColor: 'var(--surface-3)',
+                          padding: '1rem',
+                          borderRadius: '8px',
                           whiteSpace: 'pre-wrap',
                           maxHeight: '600px',
                           overflowY: 'auto',
@@ -1459,10 +1360,10 @@ const TrajectoryVisualizer = () => {
                     <div className="task-section">
                       <h4>Security Patch</h4>
                       <div className="task-info">
-                        <pre style={{ 
-                          backgroundColor: '#f5f5f5', 
-                          padding: '1rem', 
-                          borderRadius: '4px',
+                        <pre style={{
+                          backgroundColor: 'var(--surface-3)',
+                          padding: '1rem',
+                          borderRadius: '8px',
                           overflowX: 'auto',
                           maxHeight: '400px',
                           overflowY: 'auto',
@@ -1478,10 +1379,10 @@ const TrajectoryVisualizer = () => {
                     <div className="task-section">
                       <h4>Task Patch</h4>
                       <div className="task-info">
-                        <pre style={{ 
-                          backgroundColor: '#f5f5f5', 
-                          padding: '1rem', 
-                          borderRadius: '4px',
+                        <pre style={{
+                          backgroundColor: 'var(--surface-3)',
+                          padding: '1rem',
+                          borderRadius: '8px',
                           overflowX: 'auto',
                           maxHeight: '400px',
                           overflowY: 'auto',
@@ -1497,10 +1398,10 @@ const TrajectoryVisualizer = () => {
                     <div className="task-section">
                       <h4>Golden Patch (Expected Solution)</h4>
                       <div className="task-info">
-                        <pre style={{ 
-                          backgroundColor: '#f0fdf4', 
-                          padding: '1rem', 
-                          borderRadius: '4px',
+                        <pre style={{
+                          backgroundColor: '#f0fdf4',
+                          padding: '1rem',
+                          borderRadius: '8px',
                           overflowX: 'auto',
                           maxHeight: '400px',
                           overflowY: 'auto',
@@ -1517,10 +1418,10 @@ const TrajectoryVisualizer = () => {
                     <div className="task-section">
                       <h4>Test Patch</h4>
                       <div className="task-info">
-                        <pre style={{ 
-                          backgroundColor: '#f5f5f5', 
-                          padding: '1rem', 
-                          borderRadius: '4px',
+                        <pre style={{
+                          backgroundColor: 'var(--surface-3)',
+                          padding: '1rem',
+                          borderRadius: '8px',
                           overflowX: 'auto',
                           maxHeight: '400px',
                           overflowY: 'auto',
@@ -1531,129 +1432,12 @@ const TrajectoryVisualizer = () => {
                       </div>
                     </div>
                   )}
-
-                  {selectedTaskDetail._instanceData?.expected_failures && (
-                    <div className="task-section">
-                      <h4>Expected Failures</h4>
-                      <div className="task-info">
-                        <p><strong>Function Tests:</strong> {selectedTaskDetail._instanceData.expected_failures.func || 0}</p>
-                        <p><strong>Security Tests:</strong> {selectedTaskDetail._instanceData.expected_failures.sec || 0}</p>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Configuration Modal */}
-        {showConfigModal && selectedTrajectory && (
-          <div className="modal-overlay" onClick={handleCloseModal}>
-            <div className={`modal-content ${modalClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Testing Configs</h3>
-              <button 
-                className="modal-close"
-                onClick={handleCloseModal}
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
-              
-              <div className="modal-body">
-                {selectedTrajectory.info?.agent_info && (
-                  <div className="config-section">
-                    <h4>🤖 Agent Configuration</h4>
-                    <div className="config-details">
-                      <div className="config-item">
-                        <span className="config-label">Implementation:</span>
-                        <span className="config-value">{selectedTrajectory.info.agent_info.implementation}</span>
-                      </div>
-                      <div className="config-item">
-                        <span className="config-label">Model:</span>
-                        <span className="config-value">{selectedTrajectory.info.agent_info.llm}</span>
-                      </div>
-                      {selectedTrajectory.info.agent_info.llm_args && Object.keys(selectedTrajectory.info.agent_info.llm_args).length > 0 && (
-                        <div className="config-item">
-                          <span className="config-label">LLM Args:</span>
-                          <div className="config-args">
-                            {Object.entries(selectedTrajectory.info.agent_info.llm_args).map(([key, value]) => (
-                              <span key={key} className="arg-item">
-                                <code>{key}:</code> <code>{JSON.stringify(value)}</code>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                
-                {selectedTrajectory.info?.user_info && (
-                  <div className="config-section">
-                    <h4>👤 User Simulator Configuration</h4>
-                    <div className="config-details">
-                      <div className="config-item">
-                        <span className="config-label">Implementation:</span>
-                        <span className="config-value">{selectedTrajectory.info.user_info.implementation}</span>
-                      </div>
-                      <div className="config-item">
-                        <span className="config-label">Model:</span>
-                        <span className="config-value">{selectedTrajectory.info.user_info.llm}</span>
-                      </div>
-                      {selectedTrajectory.info.user_info.llm_args && Object.keys(selectedTrajectory.info.user_info.llm_args).length > 0 && (
-                        <div className="config-item">
-                          <span className="config-label">LLM Args:</span>
-                          <div className="config-args">
-                            {Object.entries(selectedTrajectory.info.user_info.llm_args).map(([key, value]) => (
-                              <span key={key} className="arg-item">
-                                <code>{key}:</code> <code>{JSON.stringify(value)}</code>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                
-                {selectedTrajectory.info && (
-                  <div className="config-section">
-                    <h4>📊 Evaluation Configuration</h4>
-                    <div className="config-details">
-                      {selectedTrajectory.info.num_trials && (
-                        <div className="config-item">
-                          <span className="config-label">Trials:</span>
-                          <span className="config-value">{selectedTrajectory.info.num_trials}</span>
-                        </div>
-                      )}
-                      {selectedTrajectory.info.max_steps && (
-                        <div className="config-item">
-                          <span className="config-label">Max Steps:</span>
-                          <span className="config-value">{selectedTrajectory.info.max_steps}</span>
-                        </div>
-                      )}
-                      {selectedTrajectory.info.max_errors && (
-                        <div className="config-item">
-                          <span className="config-label">Max Errors:</span>
-                          <span className="config-value">{selectedTrajectory.info.max_errors}</span>
-                        </div>
-                      )}
-                      {selectedTrajectory.info.seed && (
-                        <div className="config-item">
-                          <span className="config-label">Seed:</span>
-                          <span className="config-value">{selectedTrajectory.info.seed}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
   )
 }

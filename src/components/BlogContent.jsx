@@ -4,60 +4,12 @@ import '../assets/css/bulma-scoped.css'
 import '../assets/css/custom.css'
 import VulnerabilityGame from './VulnerabilityGame'
 import ExploitViewer from './ExploitViewer'
-import Carousel from './Carousel'
 import HeatmapToggle from './HeatmapToggle'
+import CategorySecurityChart from './CategorySecurityChart'
 import ScrollAnimatedSection from './ScrollAnimatedSection'
 import { useLightbox } from './ImageLightbox'
 
 const BASE = import.meta.env.BASE_URL
-
-/* ── Carousel slide data for Section 3 ───────────────────────────── */
-const mitigationSlides = [
-  {
-    image: `${BASE}images/figure 4.png`,
-    alt: 'Heatmap of Generic vs Oracle Setting outcomes',
-    caption: (
-      <>
-        <strong>Figure 4.</strong> Transition matrix of evaluation outcomes from
-        generic to oracle setting. Rows denote the outcome under generic and
-        columns denote that under oracle. Each cell reports the percentage of all
-        tasks that transition from the row outcome to the column outcome.
-      </>
-    ),
-  },
-  {
-    image: `${BASE}images/figure 6.png`,
-    alt: 'Adaptive Verification Pipeline detail',
-    caption: (
-      <>
-        <strong>Figure 6.</strong> Verification pipeline where SUSVIBES's feature
-        mask and the task are generated, verified, and adaptively adjusted. In
-        detail, (i) an initial mask is generated on the vulnerable commit before
-        the security fix, i.e., masking out a feature from its vulnerable
-        implementation; (ii) a task description is generated to describe the
-        functionality of this masked implementation; (iii) a verifier agent is
-        used to check whether the generated task description covers all lines of
-        feature implementation plus the security fixes, by linking each code line
-        to a requirement in the description. If any line in the secure
-        implementation is not mentioned by the task description, it will go back
-        to step (i) to regenerate a larger mask; otherwise, the task description
-        and the mask will be returned.
-      </>
-    ),
-  },
-  {
-    image: `${BASE}images/figure 7.png`,
-    alt: 'Venn diagrams of vulnerability blind spots across models and agents',
-    caption: (
-      <>
-        <strong>Figure 7.</strong> Distributions of the CWEs each model or
-        framework is able to avoid with over 25% pass rate. This rate is assessed
-        on the intersection of correctly-solved instances. The areas in the Venn
-        diagram approximately represent the proportions
-      </>
-    ),
-  },
-]
 
 /* ── Animated counter hook ───────────────────────────────────────── */
 function useAnimatedCounter(target, decimals, trigger) {
@@ -156,11 +108,12 @@ function BibtexSection() {
     <div className="bibtex-section has-text-centered">
       <h2 className="title">BibTeX</h2>
       <pre style={{ textAlign: 'left' }}>
-        <code ref={bibtexRef}>{`@article{zhao2025susvibes,
+        <code ref={bibtexRef}>{`@inproceedings{zhao2026is,
   title={Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks},
-  author={Zhao, Songwen and Wang, Danqing and Zhang, Kexun and Luo, Jiaxuan and Li, Zhuo and Li, Lei},
-  journal={arXiv preprint arXiv:2512.03262},
-  year={2025}
+  author={Songwen Zhao and Danqing Wang and Kexun Zhang and Jiaxuan Luo and Zhuo Li and Lei Li},
+  booktitle={Forty-third International Conference on Machine Learning},
+  year={2026},
+  url={https://openreview.net/forum?id=qG8g00zRZa}
 }`}</code>
       </pre>
       <button className="button is-small is-info mt-3" onClick={handleCopy}>
@@ -198,7 +151,9 @@ export default function BlogContent() {
                   Benchmarking Vulnerability of Agent-Generated Code in
                   Real-World Tasks
                 </h2>
+                <div className="venue-badge">ICML 2026</div>
                 <p
+                  className="blog-credit"
                   style={{
                     color: 'grey',
                     fontSize: '1rem',
@@ -210,7 +165,11 @@ export default function BlogContent() {
                   <a href="https://www.linkedin.com/in/raymondjiang0917/">
                     Raymond Jiang
                   </a>
-                  <sup>1</sup>
+                  <sup>1</sup> and{' '}
+                  <a href="https://www.linkedin.com/in/songwen-zhao">
+                    Songwen Zhao
+                  </a>
+                  <sup>1,2</sup>
                 </p>
 
                 <div className="is-size-5 publication-authors">
@@ -232,7 +191,7 @@ export default function BlogContent() {
                     <a href="https://www.linkedin.com/in/jiaxuan-luo-70780a327">
                       Jiaxuan Luo
                     </a>
-                    <sup>1,3</sup>,
+                    <sup>3</sup>,
                   </span>{' '}
                   <span className="author-block">
                     <a href="https://www.linkedin.com/in/zhuo-li-4830a145">
@@ -262,22 +221,19 @@ export default function BlogContent() {
                   </span>
                 </div>
 
-                <div className="is-size-6 publication-authors">
-                  <span className="author-block">
-                    <a href="mailto:danqingw@cs.cmu.edu">
-                      {'{'} danqingw, kexunz, leili {'}'}@cs.cmu.edu
-                    </a>
-                  </span>
-                  <br />
-                  <span className="author-block">
-                    <a href="mailto:sz3296@columbia.edu">
-                      sz3296@columbia.edu
-                    </a>
-                  </span>
-                </div>
-
                 <div className="column has-text-centered">
                   <div className="publication-links">
+                    <span className="link-block">
+                      <a
+                        href="https://openreview.net/pdf?id=qG8g00zRZa"
+                        className="external-link button is-normal is-rounded is-dark"
+                      >
+                        <span className="icon">
+                          <i className="fas fa-file-pdf" />
+                        </span>
+                        <span>Paper</span>
+                      </a>
+                    </span>
                     <span className="link-block">
                       <a
                         href="https://github.com/LeiLiLab/susvibes"
@@ -300,6 +256,17 @@ export default function BlogContent() {
                         <span>arXiv</span>
                       </a>
                     </span>
+                    <span className="link-block">
+                      <a
+                        href="https://openreview.net/forum?id=qG8g00zRZa"
+                        className="external-link button is-normal is-rounded is-dark"
+                      >
+                        <span className="icon">
+                          <i className="fas fa-book-open" />
+                        </span>
+                        <span>OpenReview</span>
+                      </a>
+                    </span>
                   </div>
                 </div>
               </div>
@@ -313,14 +280,15 @@ export default function BlogContent() {
         <div className="b-container is-max-desktop">
           <div className="teaser-box has-text-centered">
             <img
-              src={`${BASE}images/task4-1.jpg`}
+              src={`${BASE}images/task_overview.webp`}
               alt="SusVibes Example"
+              style={{ maxWidth: '600px', width: '100%' }}
             />
 
             <div className="teaser-stats mt-5">
               <div className="teaser-stat-col">
                 <p>Functional Solutions</p>
-                <div className="stat-number has-text-success">61.0%</div>
+                <div className="stat-number has-text-success">57.0%</div>
                 <p className="is-size-7">Code works as intended</p>
               </div>
               <div className="teaser-arrow">
@@ -328,14 +296,14 @@ export default function BlogContent() {
               </div>
               <div className="teaser-stat-col">
                 <p>Secure Solutions</p>
-                <div className="stat-number has-text-danger">10.5%</div>
+                <div className="stat-number has-text-danger">11.8%</div>
                 <p className="is-size-7">But contains critical vulnerabilities</p>
               </div>
             </div>
 
             <h2 className="subtitle has-text-centered mt-4">
               <span className="dnerf">SusVibes</span> reveals that while AI
-              agents can write working code, <strong>over 80%</strong> of it is
+              agents can write working code, <strong>nearly 80%</strong> of it is
               insecure.
             </h2>
           </div>
@@ -360,19 +328,20 @@ export default function BlogContent() {
                 </p>
                 <p>
                   To answer this, we propose <strong>SusVibes</strong>, a
-                  benchmark of 200 feature-request software engineering tasks
-                  from real-world open-source projects. We evaluate multiple
-                  coding agents (SWE-Agent, OpenHands, Claude Code).
-                  Disturbingly, all agents perform poorly in security. Although{' '}
-                  <strong>61%</strong> of solutions from SWE-Agent with{' '}
+                  benchmark of 186 feature-request software engineering tasks
+                  from real-world open-source projects. We evaluate 12 agentic
+                  settings — three coding agents (SWE-Agent, OpenHands, Claude
+                  Code) with four frontier models. Disturbingly, all agents
+                  perform poorly in security. Although <strong>57%</strong> of
+                  solutions from SWE-Agent with{' '}
                   <strong>Claude 4 Sonnet</strong> are functionally correct, only{' '}
-                  <strong>10.5%</strong> are secure.
+                  <strong>11.8%</strong> are secure.
                 </p>
                 <p>
                   Our findings, benchmarked across{' '}
                   <strong>Claude 4 Sonnet</strong>,{' '}
-                  <strong>Gemini 2.5 Pro</strong>, and{' '}
-                  <strong>Kimi K2</strong>, raise serious concerns about the
+                  <strong>Kimi K2</strong>, <strong>Gemini 2.5 Pro</strong>, and{' '}
+                  <strong>Gemini 3 Pro</strong>, raise serious concerns about the
                   widespread adoption of vibe-coding in security-sensitive
                   applications.
                 </p>
@@ -386,31 +355,65 @@ export default function BlogContent() {
               <h2 className="title is-3">The SusVibes Benchmark</h2>
               <div className="content has-text-justified">
                 <p>
-                  SusVibes is designed to mimic real-world "vibe coding"
-                  scenarios. Unlike previous benchmarks that focus on single
-                  files or functions, SusVibes operates at the{' '}
-                  <strong>repository level</strong>.
+                  SusVibes is the first benchmark to test whether vibe coding
+                  agents produce code that is not only functional but also secure.
+                  Each task is a real feature request drawn from a genuine
+                  open-source project, where a human developer once shipped a
+                  vulnerable implementation that was later fixed by a security
+                  patch. Three properties set it apart:
                 </p>
-                <ul>
-                  <li>
-                    <strong>200 Tasks</strong> derived from 108 open-source
-                    projects (Django, Flask, etc.).
-                  </li>
-                  <li>
-                    <strong>77 CWE Types</strong> (Common Weakness Enumerations)
-                    covered.
-                  </li>
-                  <li>
-                    <strong>150k+ Lines of Code</strong> context per task on
-                    average.
-                  </li>
-                </ul>
 
-                <div className="has-text-centered my-4">
-                  <img
-                    src={`${BASE}images/figure 2.png`}
-                    alt="Domain Coverage"
-                  />
+                <div className="bench-stats">
+                  <div className="bench-stat">
+                    <span className="bench-stat-num bench-c-red">186</span>
+                    <span className="bench-stat-lbl">tasks</span>
+                  </div>
+                  <div className="bench-stat">
+                    <span className="bench-stat-num bench-c-gold">100</span>
+                    <span className="bench-stat-lbl">repos</span>
+                  </div>
+                  <div className="bench-stat">
+                    <span className="bench-stat-num bench-c-teal">79</span>
+                    <span className="bench-stat-lbl">CWE</span>
+                  </div>
+                  <div className="bench-stat">
+                    <span className="bench-stat-num bench-c-gray">10</span>
+                    <span className="bench-stat-lbl">domains</span>
+                  </div>
+                </div>
+
+                <div className="bench-cards">
+                  <div className="bench-card bench-card-red">
+                    <h4 className="bench-card-title bench-c-red">
+                      Bigger Task
+                    </h4>
+                    <p className="bench-card-sub">
+                      Real-World Security-Oriented
+                    </p>
+                    <span className="bench-card-badge">
+                      Avg 175 edit lines · 236K context lines
+                    </span>
+                  </div>
+                  <div className="bench-card bench-card-teal">
+                    <h4 className="bench-card-title bench-c-teal">
+                      Broadest Coverage
+                    </h4>
+                    <p className="bench-card-sub">
+                      Diverse Security Risks &amp; Domains
+                    </p>
+                    <span className="bench-card-badge">
+                      7× CWE coverage · 10 domains
+                    </span>
+                  </div>
+                  <div className="bench-card bench-card-gold">
+                    <h4 className="bench-card-title bench-c-gold">
+                      Automatic Curation
+                    </h4>
+                    <p className="bench-card-sub">Extensible</p>
+                    <span className="bench-card-badge">
+                      More repos · new security issues
+                    </span>
+                  </div>
                 </div>
 
                 <h3 className="title is-4 mt-4">
@@ -418,15 +421,26 @@ export default function BlogContent() {
                 </h3>
                 <p>
                   The benchmark was constructed using a novel pipeline to ensure
-                  realism:
+                  realism. At a high level, we mine a vulnerability-fix commit,
+                  harness its human-written functional and security tests, and mask
+                  out the feature implementation to turn it back into a
+                  feature-request task:
                 </p>
+                <div className="has-text-centered my-4">
+                  <img
+                    src={`${BASE}images/fig_curation.png`}
+                    alt="SusVibes curation pipeline: mining, harnessing tests, and masking"
+                    style={{ maxWidth: '680px', width: '100%' }}
+                  />
+                </div>
+                <p>The pipeline runs in the following steps:</p>
                 <ol>
                   <li>
-                    <strong>Mining</strong>: The authors collected over 20,000
+                    <strong>Mining</strong>: We collected over 20,000
                     open-source vulnerability-fixing commits over the past 10
                     years from existing datasets (ReposVul and MoreFixes),
-                    filtering to ~3,000 Python projects using Python ≥3.7. They
-                    further filtered to commits that modify tests, ensuring each
+                    filtering to ~2,000 Python projects using Python ≥3.7. We
+                    further filter to commits that modify tests, ensuring each
                     task has human-written security tests.
                   </li>
                   <li>
@@ -439,8 +453,8 @@ export default function BlogContent() {
                     functionality tests T<sub>func</sub>.
                   </li>
                   <li>
-                    <strong>Masking</strong>: They reverted to the preceding
-                    commit C<sub>−1</sub> (the vulnerable version) and used
+                    <strong>Masking</strong>: We revert to the preceding
+                    commit C<sub>−1</sub> (the vulnerable version) and use
                     SWE-Agent to create a minimal mask M that removes the feature
                     implementation. Critically, the mask is generated on C
                     <sub>−1</sub> (not on the fixed commit C<sub>0</sub>) to
@@ -465,14 +479,15 @@ export default function BlogContent() {
                     description matches the canonical implementation.
                     <div className="has-text-centered my-4 mb-5">
                       <img
-                        src={`${BASE}images/tmp_2-1.jpg`}
-                        alt="Verification Pipeline"
+                        src={`${BASE}images/fig_verification.png`}
+                        alt="Adaptive verification stage"
+                        style={{ maxWidth: '800px', width: '100%' }}
                       />
                     </div>
                   </li>
                   <li>
                     <strong>Execution Environment</strong>: SWE-Agent was used to
-                    automatically build Docker images for all 108 repositories by
+                    automatically build Docker images for all 100 repositories by
                     consulting existing container configurations, CI/CD
                     pipelines, and documentation. This massive engineering feat
                     allows SusVibes to run in <em>executable</em> real-world
@@ -481,12 +496,14 @@ export default function BlogContent() {
                     <sub>−1</sub> fails both functional and security tests; (ii)
                     the vulnerable commit C<sub>−1</sub> passes functional but
                     fails security tests; and (iii) the fixed commit C<sub>0</sub>{' '}
-                    passes both.
+                    passes both. Finally, test quality is further verified and
+                    augmented, checking for general security properties rather
+                    than one specific implementation.
                   </li>
                 </ol>
                 <p>
-                  This setup (visualized in Figure 2 of the paper) perfectly
-                  isolates the "Vibe Coding" behavior: the agent implements a
+                  This setup (illustrated above) perfectly
+                  isolates the vibe coding behavior: the agent implements a
                   feature that <em>functionally</em> works (passes unit tests)
                   but may re-introduce the exact vulnerability the original
                   developer fixed.
@@ -502,7 +519,7 @@ export default function BlogContent() {
             </h2>
             <p className="subtitle has-text-centered">
               AI agents often write code that looks correct but hides dangerous
-              flaws. Test your skills against real examples found in the study.
+              flaws. Test your skills against real examples from SusVibes.
             </p>
             <VulnerabilityGame />
           </div>
@@ -524,34 +541,36 @@ export default function BlogContent() {
                 </p>
                 <p>
                   While <strong>Claude 4 Sonnet</strong> (with SWE-Agent) achieved
-                  the highest functional pass rate (61%), it was prone to
+                  the highest functional pass rate (57%), it was prone to
                   insecurity. In contrast, <strong>Gemini 2.5 Pro</strong> proved
                   to be the most secure model <em>conditionally</em>—when it
-                  solves a task, it's less likely to introduce a vulnerability.
+                  solves a task, it's least likely to introduce a vulnerability.
                   However, it struggles with complex functional requirements.
                 </p>
                 <p>
                   <strong>Kimi K2</strong> sits in the middle, balancing
-                  capability and caution better than Claude but not reaching
-                  Gemini's safety peaks. Notably, <strong>OpenHands</strong> was
-                  generally more secure than SWE-Agent across all models.
+                  capability and caution. <strong>Gemini 3 Pro</strong> more than
+                  doubles Gemini 2.5 Pro's functional correctness, yet its
+                  security barely improves—so it remains less secure than Gemini
+                  2.5 Pro. Among frameworks, <strong>SWE-Agent</strong> was
+                  generally the most secure, ahead of OpenHands and Claude Code.
                 </p>
                 <div className="chart-bar-container">
                   <div
                     className="chart-bar-fill"
                     style={{
-                      width: '61%',
+                      width: '57%',
                       background: 'var(--secondary-color)',
                     }}
                   >
-                    Functional: 61%
+                    Functional: 57%
                   </div>
                 </div>
                 <div className="chart-bar-container">
                   <div
                     className="chart-bar-fill"
                     style={{
-                      width: '10.5%',
+                      width: '11.8%',
                       background: 'var(--primary-color)',
                     }}
                   />
@@ -562,13 +581,13 @@ export default function BlogContent() {
                       color: '#C41230',
                     }}
                   >
-                    Secure: 10.5%
+                    Secure: 11.8%
                   </span>
                 </div>
                 <p className="is-size-7 has-text-grey">
                   * Results for SWE-Agent + Claude 4 Sonnet.{' '}
                   <strong className="has-text-danger">
-                    82.8% of the working code generated was insecure.
+                    79.3% of the working code generated was insecure.
                   </strong>
                 </p>
               </div>
@@ -584,145 +603,67 @@ export default function BlogContent() {
               </div>
 
               {/* Section 3 */}
-              <h3 className="title is-4">3. Failed Mitigation Strategies</h3>
-              <div className="content">
-                <p>
-                  Beyond the default generic security reminder ("Make sure to
-                  follow best security practices..."), the authors investigated
-                  two additional mitigation strategies on SWE-Agent with Claude 4
-                  Sonnet:
-                </p>
-                <ul>
-                  <li>
-                    <strong>Self-Selection</strong>: A 2-phase process where the
-                    agent first identifies the most relevant CWE vulnerability
-                    types from a provided list, then implements the code with
-                    those risks in mind.
-                  </li>
-                  <li>
-                    <strong>Oracle CWE</strong>: Providing the agent with the
-                    ground-truth CWE that the task targets and explicitly asking
-                    it to avoid that vulnerability type.
-                  </li>
-                </ul>
-                <p>
-                  Surprisingly,{' '}
-                  <strong>
-                    neither strategy improved the number of secure solutions
-                  </strong>
-                  . Self-selection dropped FUNCPASS from 61.0% to 52.5% (−8.5 pp)
-                  while SECPASS fell from 10.5% to 9.5%. Even providing the oracle
-                  CWE only maintained SECPASS at 10.5% while reducing FUNCPASS to
-                  56.0% (−5.5 pp). The agents became{' '}
-                  <strong>"over-defensive"</strong>—obsessing over security checks
-                  to the point where they broke the actual feature logic or
-                  mishandled functional edge cases.
-                </p>
-                <p>
-                  This is caused by two competing trends when giving agents extra
-                  security prompts: <strong>(1)</strong> The prompts improve the
-                  agent's ability to defend against security risks, turning some
-                  previously insecure solutions into secure ones; but{' '}
-                  <strong>(2)</strong> the prompts cause previously correct
-                  solutions to regress to incorrect, as agents overly focus on
-                  security and omit functional edge cases. The net effect is that
-                  the second trend dominates, leading to an overall performance
-                  drop.
-                </p>
-                <Carousel slides={mitigationSlides} id="mitigation" />
-              </div>
-
-              {/* Section 4 */}
               <h3 className="title is-4">
-                4. Complementary Blind Spots Across Models
+                3. Complementary Blind Spots Across Models
               </h3>
               <div className="content">
                 <p>
-                  To compare security awareness independently of coding ability,
-                  the authors define <strong>SECPASS⊥FUNCPASS</strong>: the
-                  security rate on <em>only</em> the tasks all models solve
-                  correctly.
+                  Using <strong>SECPASS⊥FUNCPASS</strong> — the security rate
+                  measured on <em>only</em> the tasks all models solve correctly —
+                  we can compare security awareness independently of coding
+                  ability. Broken down by vulnerability category, no single model
+                  is safest everywhere: each frontier model is the most cautious
+                  on a <em>different</em> class of weakness.
                 </p>
 
-                <ScrollAnimatedSection className="blind-spot-bars" id="blind-spot-bars">
+                <ScrollAnimatedSection className="catsec-wrap" id="catsec-chart">
                   {(isVisible) => (
-                    <>
-                      <div className="bar-row">
-                        <span className="bar-label">Gemini 2.5 Pro</span>
-                        <div className="bar-track">
-                          <div
-                            className="bar-fill bar-gold"
-                            style={{ width: isVisible ? '55%' : '0%' }}
-                          >
-                            27.6%
-                          </div>
-                        </div>
-                      </div>
-                      <div className="bar-row">
-                        <span className="bar-label">Kimi K2</span>
-                        <div className="bar-track">
-                          <div
-                            className="bar-fill bar-silver"
-                            style={{ width: isVisible ? '41%' : '0%' }}
-                          >
-                            20.7%
-                          </div>
-                        </div>
-                      </div>
-                      <div className="bar-row">
-                        <span className="bar-label">Claude 4 Sonnet</span>
-                        <div className="bar-track">
-                          <div
-                            className="bar-fill bar-bronze"
-                            style={{ width: isVisible ? '34%' : '0%' }}
-                          >
-                            17.2%
-                          </div>
-                        </div>
-                      </div>
-                      <p className="is-size-7 has-text-grey has-text-centered mt-3 mb-0">
-                        Conditional security rate (SECPASS⊥FUNCPASS, %) — OpenHands
-                        framework
-                      </p>
-                    </>
+                    <CategorySecurityChart isVisible={isVisible} />
                   )}
                 </ScrollAnimatedSection>
 
                 <div className="section-takeaway">
                   <strong>
-                    58% of CWE blind spots were unique to specific models
+                    Different models are cautious about entirely different
+                    vulnerability types.
                   </strong>{' '}
-                  — different LLMs are cautious about entirely different
-                  vulnerability types. Switching models doesn't guarantee safety;
-                  it merely <strong>rotates the risk surface</strong>.
+                  Gemini 2.5 Pro is the most cautious on injection and insecure
+                  design, Kimi K2 leads on cryptographic failures, and Gemini 3
+                  Pro is safest on broken access control and resource exhaustion.
+                  Strikingly, Claude 4 Sonnet — the strongest model on
+                  functionality — tops <em>no</em> category on security. Switching
+                  models doesn't guarantee safety; it merely{' '}
+                  <strong>rotates the risk surface</strong>.
+                </div>
+              </div>
+
+              {/* Section 4 */}
+              <h3 className="title is-4">
+                4. Same CWE, Different Outcomes
+              </h3>
+              <div className="content">
+                <p>
+                  Even within the same CWE (Broken Access Control), security
+                  outcomes differ wildly across application domains. Toggle between
+                  models to compare:
+                </p>
+                <HeatmapToggle />
+                <p className="is-size-7 has-text-grey has-text-centered mt-0 mb-2">
+                  Security rate (SECPASS⊥FUNCPASS, %) per application domain — CWE
+                  Broken Access Control
+                </p>
+                <div className="section-takeaway">
+                  For the same weakness, the security winner{' '}
+                  <strong>flips by domain</strong>: Claude 4 Sonnet leads in
+                  Developer Tools (33.3%), while Gemini 2.5 Pro leads in Data
+                  Science (16.7%) and AI (50.0%). Coding ability and security
+                  awareness are independent capabilities.
                 </div>
               </div>
 
               {/* Section 5 */}
               <h3 className="title is-4">
-                5. Same CWE, Different Outcomes
-              </h3>
-              <div className="content">
-                <p>
-                  Even within the same CWE, security outcomes differ wildly across
-                  repositories. Toggle between models to compare:
-                </p>
-                <HeatmapToggle />
-                <p className="is-size-7 has-text-grey has-text-centered mt-0 mb-2">
-                  Security rate (SECPASS⊥FUNCPASS, %) per repository — SWE-Agent
-                </p>
-                <div className="section-takeaway">
-                  Claude 4 Sonnet achieves 58.8% functionality on Django but{' '}
-                  <strong>0% conditional security</strong>, while Gemini manages{' '}
-                  <strong>100% security</strong> despite lower functionality.
-                  Coding ability and security awareness are independent
-                  capabilities.
-                </div>
-              </div>
-
-              {/* Section 6 */}
-              <h3 className="title is-4">
-                6. Can Smarter Models Close the Gap?
+                5. Can Smarter Models Close the Gap?
               </h3>
               <div className="content">
                 <p>
@@ -747,9 +688,9 @@ export default function BlogContent() {
                             <div className="comparison-bar-track">
                               <div
                                 className="comparison-bar-fill func-bar"
-                                style={{ width: isVisible ? '69%' : '0%' }}
+                                style={{ width: isVisible ? '60%' : '0%' }}
                               >
-                                +95%
+                                +103%
                               </div>
                             </div>
                           </div>
@@ -760,17 +701,17 @@ export default function BlogContent() {
                             <div className="comparison-bar-track">
                               <div
                                 className="comparison-bar-fill sec-bar"
-                                style={{ width: isVisible ? '41%' : '0%' }}
+                                style={{ width: isVisible ? '57%' : '0%' }}
                               >
-                                +57%
+                                +98%
                               </div>
                             </div>
                           </div>
                         </div>
                         <div className="comparison-delta positive">
-                          ↑ 95%
+                          ↑ 103%
                           <br />
-                          <span className="tiny">↑ 57%</span>
+                          <span className="tiny">↑ 98%</span>
                         </div>
                       </div>
                       {/* OpenHands */}
@@ -784,9 +725,9 @@ export default function BlogContent() {
                             <div className="comparison-bar-track">
                               <div
                                 className="comparison-bar-fill func-bar"
-                                style={{ width: isVisible ? '97%' : '0%' }}
+                                style={{ width: isVisible ? '90%' : '0%' }}
                               >
-                                +149%
+                                +154%
                               </div>
                             </div>
                           </div>
@@ -797,17 +738,17 @@ export default function BlogContent() {
                             <div className="comparison-bar-track">
                               <div
                                 className="comparison-bar-fill sec-bar"
-                                style={{ width: isVisible ? '5%' : '0%' }}
+                                style={{ width: isVisible ? '19%' : '0%' }}
                               >
-                                +6%
+                                +33%
                               </div>
                             </div>
                           </div>
                         </div>
                         <div className="comparison-delta positive">
-                          ↑ 149%
+                          ↑ 154%
                           <br />
-                          <span className="tiny">↑ 6%</span>
+                          <span className="tiny">↑ 33%</span>
                         </div>
                       </div>
                       {/* Claude Code */}
@@ -821,9 +762,9 @@ export default function BlogContent() {
                             <div className="comparison-bar-track">
                               <div
                                 className="comparison-bar-fill func-bar"
-                                style={{ width: isVisible ? '86%' : '0%' }}
+                                style={{ width: isVisible ? '100%' : '0%' }}
                               >
-                                +130%
+                                +171%
                               </div>
                             </div>
                           </div>
@@ -833,18 +774,18 @@ export default function BlogContent() {
                             </span>
                             <div className="comparison-bar-track">
                               <div
-                                className="comparison-bar-fill sec-bar-flat"
-                                style={{ width: isVisible ? '2%' : '0%' }}
+                                className="comparison-bar-fill sec-bar"
+                                style={{ width: isVisible ? '42%' : '0%' }}
                               >
-                                ±0%
+                                +71%
                               </div>
                             </div>
                           </div>
                         </div>
-                        <div className="comparison-delta flat">
-                          ↑ 130%
+                        <div className="comparison-delta positive">
+                          ↑ 171%
                           <br />
-                          <span className="flat">±0%</span>
+                          <span className="tiny">↑ 71%</span>
                         </div>
                       </div>
                     </>
@@ -857,10 +798,86 @@ export default function BlogContent() {
                 </p>
 
                 <div className="section-takeaway">
-                  Functionality improves by <strong>up to +149%</strong>, but
-                  security gains are <strong>negligible or zero</strong>. More
-                  intelligence alone is not sufficient for secure code.
+                  Functionality jumps by <strong>up to +171%</strong>, but
+                  security lags far behind. Once you control for the larger
+                  functional base (SECPASS⊥FUNCPASS), Gemini 3 Pro is actually{' '}
+                  <strong>less secure overall than Gemini 2.5 Pro</strong>{' '}
+                  (21.4% vs 30.4%). More intelligence alone is not sufficient for
+                  secure code.
                 </div>
+              </div>
+
+              {/* Section 6 */}
+              <h3 className="title is-4">6. Failed Mitigation Strategies</h3>
+              <div className="content">
+                <p>
+                  Beyond the default generic security reminder ("Make sure to
+                  follow best security practices..."), we investigated
+                  two additional mitigation strategies on SWE-Agent with Claude 4
+                  Sonnet:
+                </p>
+                <ul>
+                  <li>
+                    <strong>Self-Selection</strong>: A 2-phase process where the
+                    agent first identifies the most relevant CWE vulnerability
+                    types from a provided list, then implements the code with
+                    those risks in mind.
+                  </li>
+                  <li>
+                    <strong>Oracle</strong>: Providing the agent with the
+                    ground-truth CWE that the task targets and explicitly asking
+                    it to avoid that vulnerability type.
+                  </li>
+                </ul>
+                <p>
+                  Surprisingly,{' '}
+                  <strong>
+                    neither strategy substantially mitigated the security problem
+                  </strong>
+                  . Both nudged a few more solutions to be secure, but at a real
+                  cost to functionality. Self-selection dropped FuncPass from
+                  57.0% to 50.0% (−7.0 pp) while only lifting SecPass from 11.8%
+                  to 14.5% (+2.7 pp). Providing the oracle CWE raised SecPass to
+                  15.1% (+3.3 pp) but still reduced FuncPass to 55.4% (−1.6 pp).
+                </p>
+                <p>
+                  We hypothesize two competing trends behind these limited gains.{' '}
+                  <strong>(1)</strong> Extra security prompts improve the agent's
+                  ability to recognize and defend against risks, turning some
+                  previously insecure solutions secure; but{' '}
+                  <strong>(2)</strong> they also push the agent to over-focus on
+                  security and omit functional edge cases, regressing previously
+                  correct solutions to incorrect. When the second trend is strong
+                  it cancels much of the first, so a strategy can raise the secure
+                  fraction and yet still lower overall functional correctness.
+                </p>
+                <div className="has-text-centered my-4">
+                  <img
+                    src={`${BASE}images/fig_mitigation.png`}
+                    alt="Two competing trends of security strategies across settings"
+                    style={{ maxWidth: '460px', width: '100%' }}
+                  />
+                  <p className="is-size-7 has-text-grey mt-2 mb-0">
+                    Two competing trends across settings: the securely-solved
+                    fraction (green) and the once-correct-now-incorrect fraction
+                    (red). Self-selection maximizes both; the oracle keeps the
+                    security gain with far less regression.
+                  </p>
+                </div>
+                <p>
+                  This figure sharpens the contrast between the two strategies.
+                  Measured on the tasks every setting solves,{' '}
+                  <strong>self-selection is as secure as the oracle</strong> — its
+                  secure fraction (green) is comparable to, even a touch above, the
+                  oracle's — even though the oracle hands the agent the exact
+                  ground-truth CWE to avoid. But self-selection pays for it with a
+                  far larger regression spike (red), giving it the{' '}
+                  <strong>largest functional drop</strong> of the two. The likely
+                  reason it keeps pace with the oracle is that working out which
+                  CWEs apply forces the agent to reason about the specific task
+                  context, giving it a better-grounded sense of the real risk than
+                  a CWE label handed to it out of context.
+                </p>
               </div>
 
               {/* Section 7 */}
@@ -871,8 +888,8 @@ export default function BlogContent() {
                 <p>
                   In the self-selection setting, agents were asked to identify
                   relevant CWEs before coding. On average, agents selected{' '}
-                  <strong>7.5 CWEs</strong> per task — against a ground truth of
-                  just <strong>1.06</strong>. This means agents cast a very wide
+                  <strong>7.2 CWEs</strong> per task — against a ground truth of
+                  just <strong>1.1</strong>. This means agents cast a very wide
                   net, tagging many vulnerability types in the hope of covering
                   the right one.
                 </p>
@@ -885,14 +902,14 @@ export default function BlogContent() {
                   {(isVisible) => (
                     <>
                       <StatCounterCard
-                        target={7.5}
+                        target={7.2}
                         decimals={1}
                         label="CWEs selected<br/>(per task, avg)"
                         isVisible={isVisible}
                       />
                       <StatCounterCard
-                        target={1.06}
-                        decimals={2}
+                        target={1.1}
+                        decimals={1}
                         label="Actual CWEs<br/>(ground truth)"
                         style={{ color: 'var(--primary-color)' }}
                         isVisible={isVisible}
@@ -902,7 +919,7 @@ export default function BlogContent() {
                 </ScrollAnimatedSection>
 
                 <p>
-                  But does this shotgun approach work? The paper measures{' '}
+                  But does this shotgun approach work? We measure{' '}
                   <strong>precision</strong> (what fraction of selected CWEs were
                   actually correct) and <strong>recall</strong> (whether the true
                   CWE was among those selected) for solutions that were both
@@ -925,11 +942,11 @@ export default function BlogContent() {
                         isVisible={isVisible}
                       />
                       <ProgressRing
-                        target={73.7}
+                        target={66.7}
                         colorClass="ring-green"
-                        valueLabel="73.7%"
+                        valueLabel="66.7%"
                         label="Recall"
-                        sublabel="The true CWE was found<br/>~3 out of 4 times"
+                        sublabel="The true CWE was found<br/>~2 out of 3 times"
                         isVisible={isVisible}
                       />
                     </>
@@ -938,18 +955,18 @@ export default function BlogContent() {
 
                 <p>
                   There is a clear signal: solutions that end up being secure have
-                  significantly higher recall (0.737 vs 0.609 for insecure
+                  significantly higher recall (0.667 vs 0.561 for correct-but-insecure
                   solutions), suggesting that correctly identifying the right CWE
                   does help produce secure code. However, even the best recall is
-                  only 73.7% — meaning agents still miss the target CWE{' '}
-                  <strong>over a quarter of the time</strong>, even after selecting
+                  only 66.7% — meaning agents still miss the target CWE{' '}
+                  <strong>a third of the time</strong>, even after selecting
                   7× more CWEs than necessary.
                 </p>
 
                 <div className="section-takeaway">
                   Agents <strong>hedge by selecting many CWEs</strong>, most
                   irrelevant (~10% precision). Even then, they still miss the
-                  target CWE over a quarter of the time. Current coding agents
+                  target CWE about a third of the time. Current coding agents
                   have{' '}
                   <strong>
                     fundamental difficulty identifying security risks
@@ -1085,9 +1102,11 @@ export default function BlogContent() {
                 </p>
 
                 <div className="section-takeaway">
-                  Security awareness <strong>cannot be bolted on</strong> via
-                  prompting — it must be treated as a{' '}
-                  <strong>first-class training objective</strong>.
+                  Prompting alone appears <strong>insufficient</strong> to bolt
+                  security onto existing agents — closing the gap likely calls for{' '}
+                  <strong>better security strategies</strong>, with more rigorous
+                  training and structured planning rather than security as an
+                  afterthought.
                 </div>
               </div>
 
@@ -1102,7 +1121,7 @@ export default function BlogContent() {
                     systematically fail security checks on the same tasks
                   </strong>
                   . The best-performing combination (SWE-Agent + Claude 4 Sonnet)
-                  achieves 61% functionality but leaves over 80% of working code
+                  achieves 57% functionality but leaves nearly 80% of working code
                   insecure.
                 </p>
                 <p>
@@ -1116,7 +1135,7 @@ export default function BlogContent() {
                   security gains.
                 </p>
                 <p>
-                  The finding that 80%+ of functionally correct agent-generated
+                  The finding that nearly 80% of functionally correct agent-generated
                   code contains exploitable vulnerabilities has profound
                   implications for organizations deploying coding agents in
                   security-sensitive domains including authentication, data

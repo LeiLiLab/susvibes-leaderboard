@@ -127,7 +127,7 @@ public/
 │   ├── manifest.json            #   list of displayed submission directories
 │   ├── schema.json              #   submission.json JSON schema
 │   └── <DIR>/                   #   submission.json + trajectories/
-└── datasets/                    # susvibes_dataset.jsonl
+└── datasets/                    # susvibes_dataset_<version>.jsonl (per dataset version)
 
 maintenance/                      # submission-data migration & maintenance scripts
 docs/                            # SUBMISSION_GUIDE.md, TRAJECTORY_FORMAT.md

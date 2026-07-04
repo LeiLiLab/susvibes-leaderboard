@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import PillSelect from './PillSelect'
+import { sortVersionsDesc } from '../utils/version'
 import './Leaderboard.css'
 
 // Colors for different LLM backbones - maximally distinct color palette
@@ -184,7 +186,8 @@ const Leaderboard = () => {
 
   // Dataset version filter (temporary v0.0 -> v1.0 migration toggle), keyed off
   // each submission's methodology.susvibes_version. Default 'v1.0'.
-  const [datasetVersion, setDatasetVersion] = useState('v1.0')
+  // null until a version is chosen; effectiveVersion falls back to the latest present.
+  const [datasetVersion, setDatasetVersion] = useState(null)
 
   // Add state for dynamically loaded data
   const [passKData, setPassKData] = useState({})
@@ -208,6 +211,13 @@ const Leaderboard = () => {
 
   // Pinned tooltips state for persistent click-based popups
   const [pinnedTooltips, setPinnedTooltips] = useState([])
+
+  // Dataset versions present in the data, newest first; selection falls back to the latest.
+  const availableVersions = useMemo(
+    () => sortVersionsDesc([...new Set(Object.values(passKData).map(m => m.version || 'v0.0'))]),
+    [passKData]
+  )
+  const effectiveVersion = datasetVersion ?? availableVersions[0] ?? 'v1.0'
 
   // Helper function to create composite key from agent framework and model name
   const createAgentName = (agentFramework, modelName, submissionType, customLabel) => {
@@ -354,7 +364,7 @@ const Leaderboard = () => {
         const domainData = modelData[domain]
 
         // Only this dataset version
-        if ((modelData.version || 'v0.0') !== datasetVersion) return
+        if ((modelData.version || 'v0.0') !== effectiveVersion) return
 
         // Only include models/frameworks that have valid chart data
         if (domainData && domainData.funcPass1 !== null && domainData.secPass1 !== null) {
@@ -372,7 +382,7 @@ const Leaderboard = () => {
       setSelectedModels(new Set(models))
       setSelectedFrameworks(new Set(frameworks))
     }
-  }, [passKData, domain, datasetVersion])
+  }, [passKData, domain, effectiveVersion])
 
   // Initialize chart when leaderboard view is active and chart view is selected
   useEffect(() => {
@@ -386,7 +396,7 @@ const Leaderboard = () => {
         clearTimeout(timer)
       }
     }
-  }, [leaderboardView, domain, isLoading, passKData, showStandard, showCustom, selectedModels, selectedFrameworks, datasetVersion]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [leaderboardView, domain, isLoading, passKData, showStandard, showCustom, selectedModels, selectedFrameworks, effectiveVersion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Draw point styles on legend canvases when legend data changes
   useEffect(() => {
@@ -544,7 +554,7 @@ const Leaderboard = () => {
         const domainData = modelData[domain]
 
         // Filter by dataset version
-        if ((modelData.version || 'v0.0') !== datasetVersion) {
+        if ((modelData.version || 'v0.0') !== effectiveVersion) {
           return
         }
 
@@ -928,27 +938,13 @@ const Leaderboard = () => {
           </div>
         </div>
 
-        {/* Dataset version toggle (temporary v0 -> v1 migration) — matches the Table/Chart switch */}
-        <div className="view-toggle-switch dataset-version-toggle">
-          <div className="toggle-container">
-            <button
-              className={`toggle-option ${datasetVersion === 'v0.0' ? 'active' : ''}`}
-              onClick={() => setDatasetVersion('v0.0')}
-            >
-              v0.0
-            </button>
-            <button
-              className={`toggle-option ${datasetVersion === 'v1.0' ? 'active' : ''}`}
-              onClick={() => setDatasetVersion('v1.0')}
-            >
-              v1.0
-            </button>
-            <div
-              className="toggle-slider"
-              style={{ transform: datasetVersion === 'v1.0' ? 'translateX(100%)' : 'translateX(0%)' }}
-            />
-          </div>
-        </div>
+        {/* Dataset version selector — scales to any number of versions */}
+        <PillSelect
+          label="Version"
+          options={availableVersions}
+          value={effectiveVersion}
+          onChange={setDatasetVersion}
+        />
 
         {/* Submission Type Filter */}
         <div className="submission-type-filter">
@@ -1206,9 +1202,9 @@ const Leaderboard = () => {
                     {(() => {
                       // Calculate domain-specific scores for ranking
                       const modelStats = Object.entries(passKData)
-                        .filter(([agentName, data]) => {
+                        .filter(([, data]) => {
                           // Filter by dataset version first
-                          if ((data.version || 'v0.0') !== datasetVersion) {
+                          if ((data.version || 'v0.0') !== effectiveVersion) {
                             return false
                           }
 
@@ -1378,28 +1374,28 @@ const Leaderboard = () => {
                             <div className="org-container">
                               <div className="company-logo">
                                 {model.organization === 'Anthropic' && (
-                                  <img src={`${import.meta.env.BASE_URL}claude.png`} alt="Anthropic" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_anthropic.png`} alt="Anthropic" className="logo-img" />
                                 )}
                                 {model.organization === 'OpenAI' && (
-                                  <img src={`${import.meta.env.BASE_URL}openai.svg`} alt="OpenAI" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_openai.svg`} alt="OpenAI" className="logo-img" />
                                 )}
                                 {model.organization === 'Sierra' && (
-                                  <img src={`${import.meta.env.BASE_URL}sierra-logo.png`} alt="Sierra" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_sierra.png`} alt="Sierra" className="logo-img" />
                                 )}
                                 {model.organization === 'Moonshot AI' && (
                                   <span className="emoji-logo">🚀</span>
                                 )}
                                 {model.organization === 'DeepSeek' && (
-                                  <img src={`${import.meta.env.BASE_URL}DeepSeek_logo_icon.png`} alt="DeepSeek" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_deepseek.png`} alt="DeepSeek" className="logo-img" />
                                 )}
                                 {(model.organization === 'Alibaba' || model.organization === 'Qwen') && (
-                                  <img src={`${import.meta.env.BASE_URL}qwen-color.png`} alt="Qwen" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_qwen.png`} alt="Qwen" className="logo-img" />
                                 )}
                                 {model.organization === 'Google' && (
-                                  <img src={`${import.meta.env.BASE_URL}Google__G__logo.svg.png`} alt="Google" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_google.png`} alt="Google" className="logo-img" />
                                 )}
                                 {model.organization === 'NVIDIA' && (
-                                  <img src={`${import.meta.env.BASE_URL}Logo-nvidia-transparent-PNG.png`} alt="NVIDIA" className="logo-img" />
+                                  <img src={`${import.meta.env.BASE_URL}logos/logo_nvidia.png`} alt="NVIDIA" className="logo-img" />
                                 )}
                               </div>
                               <span className="org-name">{model.organization}</span>
