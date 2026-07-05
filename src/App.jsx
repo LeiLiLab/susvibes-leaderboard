@@ -266,11 +266,11 @@ function App() {
           <p>
             For questions or feedback, contact{' '}
             <a href="mailto:songwen.zhao@columbia.edu" className="footer-email">
-              songwen.zhao@columbia.edu
+              Songwen Zhao
             </a>
             {' '}or{' '}
             <a href="mailto:danqingw@cs.cmu.edu" className="footer-email">
-              danqingw@cs.cmu.edu
+              Danqing Wang
             </a>
           </p>
           {currentView === 'blog' && (
