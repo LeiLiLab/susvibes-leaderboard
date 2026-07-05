@@ -385,7 +385,7 @@ export default function BlogContent() {
                 <div className="bench-cards">
                   <div className="bench-card bench-card-red">
                     <h4 className="bench-card-title bench-c-red">
-                      Bigger Task
+                      Bigger Task at Repo-level
                     </h4>
                     <p className="bench-card-sub">
                       Real-World Security-Oriented
