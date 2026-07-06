@@ -1,12 +1,9 @@
 # Trajectory & Submission File Format
 
-Authoritative spec for the files under `public/submissions/<DIR>/trajectories/`.
-The leaderboard reads these at runtime; the trajectory visualizer renders them; the
-training exporters consume them. There is **one** stored format — OpenAI-style
-`messages` — described here.
-
-> Converting scaffold-native logs into this format is done by the tools in
-> [`maintenance/`](../maintenance/README.md).
+The format for the files under `public/submissions/<DIR>/trajectories/`, which the leaderboard
+reads at runtime and the trajectory visualizer renders. Trajectories are stored in a single
+format — OpenAI-style `messages` — described below; produce your files in this format from your
+run's logs.
 
 ---
 
@@ -17,10 +14,14 @@ public/submissions/<DIR>/
 ├── submission.json                     # leaderboard metadata + scores (see schema.json)
 └── trajectories/
     ├── <DIR>.trials.json               # per-instance records (this spec)
-    ├── <DIR>.summary.json              # correctness summary (optional but recommended)
+    ├── <DIR>.summary.json              # SusVibes eval summary
     └── messages/                       # only for the "split" format
         └── <instance_id>.json
 ```
+
+`submission.json` is the only always-required file. A submission that includes trajectories
+provides **both** `<DIR>.trials.json` and `<DIR>.summary.json` (that's what makes it Verified);
+a scores-only, unverified submission has just `submission.json`.
 
 `<DIR>` is the submission directory name and the file stems must match it exactly
 (the loader derives `<DIR>.summary.json` from `<DIR>.trials.json`).
@@ -178,19 +179,19 @@ Both are supported; a single submission may mix them.
 
 ## `<DIR>.summary.json`
 
-Drives the per-instance correctness badges in the visualizer. Optional — without it,
-trajectories still render but every instance shows as not-correct.
+Emit it exactly as below. A current SusVibes evaluation already writes this format
+(`logs/eval/<run_id>/<strategy>/<model>/summary.json`), so you can submit that file verbatim.
+It drives the per-instance correctness badges in the visualizer and the leaderboard scores.
 
 ```jsonc
 {
-  "num_candidates": 200,            // dataset size for this version (v0.0=200, v1.0=186)
+  "num_candidates": 186,            // dataset size for the version you ran (v0.0=200, v1.0=186)
   "num_submitted": 178,
   "num_empty_model_patch": 0,
   "num_model_patch_errors": 3,
   "num_indeterminate": 0,
-  "num_reward_hack_removed": 1,     // reward-hack trajectories removed (0 if none)
-  "func_pass": 0.67,
-  "sec_pass": 0.26,
+  "func_pass": 0.67,               // |details.completed.func_pass| / num_candidates
+  "sec_pass": 0.26,               // |details.completed.sec_pass|  / num_candidates
   "details": {
     "empty_model_patch": [],
     "model_patch_error": ["<instance_id>", "..."],
@@ -198,14 +199,18 @@ trajectories still render but every instance shows as not-correct.
     "completed": {
       "func_pass": ["<instance_id>", "..."],   // FuncPass instances
       "sec_pass":  ["<instance_id>", "..."]     // SecPass instances
-    },
-    "reward_hack_removed": ["<instance_id>", "..."]   // removed reward-hack instances
+    }
   }
 }
 ```
 
-Only `details.completed.func_pass` and `details.completed.sec_pass` are read by the
-visualizer (matched by `instance_id`). The `func_pass` / `sec_pass` ratios are kept equal
-to the leaderboard score in `submission.json` (= score / 100), which already excludes any
-reward-hack instances; the removed ones are recorded under `details.reward_hack_removed`
-(count in `num_reward_hack_removed`).
+The visualizer reads the per-instance lists `details.completed.func_pass` and
+`details.completed.sec_pass`, marking each trajectory's FuncPass / SecPass badge by matching
+`instance_id`. The leaderboard score itself comes separately from `submission.json`
+(`results.python.func_pass_1` / `sec_pass_1`); keep the summary's aggregate `func_pass` /
+`sec_pass` ratios consistent with it (= score / 100).
+
+> Maintainers may later add `num_reward_hack_removed` (int) and
+> `details.reward_hack_removed` (instance-id list) if any trajectories are found to reward-hack
+> and are pulled from display; those instances leave the numerator but stay in
+> `num_candidates`, so the score drops. Submitters do not provide these fields.

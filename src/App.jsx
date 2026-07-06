@@ -235,7 +235,7 @@ function App() {
                   <button onClick={() => navigateTo('leaderboard')} className="btn-secondary">
                     View Leaderboard
                   </button>
-                  <a href="https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/README.md" target="_blank" rel="noopener noreferrer">
+                  <a href="https://github.com/LeiLiLab/susvibes-leaderboard/blob/main/docs/SUBMISSION_GUIDE.md" target="_blank" rel="noopener noreferrer">
                     <button className="btn-secondary">Submit Results</button>
                   </a>
                   <a href="https://openreview.net/pdf?id=qG8g00zRZa" target="_blank" rel="noopener noreferrer">

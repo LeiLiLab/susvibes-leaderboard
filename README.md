@@ -32,81 +32,23 @@
 
 ## 📊 Submitting to the Leaderboard
 
-We welcome community submissions! The leaderboard now accepts model evaluation results through pull requests.
+We welcome community submissions. Results are added through pull requests. At a high level:
 
-### How to Submit
+1. **Evaluate your model** with [SusVibes](https://github.com/LeiLiLab/susvibes).
+2. **Assemble a submission directory** — a `submission.json` (metadata + scores) plus a
+   `trajectories/` folder with your run's trajectory and summary files.
+3. **Open a pull request** adding that directory under `public/submissions/` and listing it in
+   `manifest.json`.
 
-1. **Evaluate your model** using [SusVibes](https://github.com/LeiLiLab/susvibes)
-2. **Create a JSON submission** following our schema (see `public/submissions/schema.json`)
-3. **Submit a pull request** with your results file and trajectory links for verification
-
-### Quick Example
-
-```json
-{
-  "model_name": "My-Model-v1.0",
-  "agent_framework": "My-Agent-Framework",
-  "model_organization": "My Organization",
-  "submitting_organization": "My Organization",
-  "submission_date": "2025-01-15",
-  "contact_info": {
-    "email": "contact@myorg.com",
-    "name": "Research Team"
-  },
-  "trajectories_available": true,
-  "references": [
-    {
-      "title": "Model Technical Paper",
-      "url": "https://arxiv.org/abs/2401.00000",
-      "type": "paper"
-    },
-    {
-      "title": "Model Documentation",
-      "url": "https://docs.example.com/model",
-      "type": "documentation"
-    }
-  ],
-  "results": {
-    "python": {
-      "func_pass_1": 50.0,
-      "sec_pass_1": 10.0,
-      "cost": 0.025
-    }
-  },
-  "methodology": {
-    "evaluation_date": "2025-01-10",
-    "susvibes_version": "v0.0",
-    "agent_framework": "My-Agent-Framework",
-    "verification": {
-      "modified_prompts": false,
-      "omitted_questions": true,
-      "details": "Only evaluated Pass@1 for all domains"
-    }
-  }
-}
-```
-
-### 🔍 Verification System
-
-The leaderboard now includes a verification system to ensure result quality:
-
-- **✅ Verified submissions** have trajectory data, use standard prompts, and complete all evaluations
-- **⚠️ Unverified submissions** are marked with caution icons and may have missing data or modified methodologies
-- Click on any model name to see detailed verification status and methodology information
-
-### 📚 Model References
-
-Each submission can include links to papers, documentation, and other resources about the model. This helps researchers access relevant information directly from the leaderboard. References are displayed in the model detail view with categorized badges for easy identification.
-
-📋 **See [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) for complete submission instructions.**
+📋 **Follow [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) for the full step-by-step
+process** (standard vs custom submissions, naming, the review checklist).
 
 ## 📚 Documentation
 
 | Doc | What it covers |
 |-----|----------------|
-| [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) | How to submit results via pull request (standard & custom). |
-| [docs/TRAJECTORY_FORMAT.md](docs/TRAJECTORY_FORMAT.md) | The trajectory / submission file format (the single source of truth). |
-| [maintenance/README.md](maintenance/README.md) | Data migration & maintenance scripts for the submission data (scaffold→format converters live in the SusVibes eval harness). |
+| [docs/SUBMISSION_GUIDE.md](docs/SUBMISSION_GUIDE.md) | How to submit results via pull request (standard & custom), step by step. |
+| [docs/TRAJECTORY_FORMAT.md](docs/TRAJECTORY_FORMAT.md) | The exact `trajectories/` file format — `trials.json` + `summary.json` (the single source of truth). |
 
 ## 🔧 Development
 
@@ -129,7 +71,6 @@ public/
 │   └── <DIR>/                   #   submission.json + trajectories/
 └── datasets/                    # susvibes_dataset_<version>.jsonl (per dataset version)
 
-maintenance/                      # submission-data migration & maintenance scripts
 docs/                            # SUBMISSION_GUIDE.md, TRAJECTORY_FORMAT.md
 ```
 
