@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import PillSelect from './PillSelect'
+import VersionInfo from './VersionInfo'
 import { sortVersionsDesc } from '../utils/version'
 import './Leaderboard.css'
 
@@ -939,12 +940,15 @@ const Leaderboard = () => {
         </div>
 
         {/* Dataset version selector — scales to any number of versions */}
-        <PillSelect
-          label="Version"
-          options={availableVersions}
-          value={effectiveVersion}
-          onChange={setDatasetVersion}
-        />
+        <div className="version-selector-row">
+          <PillSelect
+            label="Version"
+            options={availableVersions}
+            value={effectiveVersion}
+            onChange={setDatasetVersion}
+          />
+          <VersionInfo />
+        </div>
 
         {/* Submission Type Filter */}
         <div className="submission-type-filter">

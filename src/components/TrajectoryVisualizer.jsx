@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import './TrajectoryVisualizer.css'
 import PillSelect from './PillSelect'
+import VersionInfo from './VersionInfo'
 import { sortVersionsDesc } from '../utils/version'
 
 const TrajectoryVisualizer = () => {
@@ -686,22 +687,25 @@ const TrajectoryVisualizer = () => {
             </div>
 
             {/* Dataset version selector — scales to any number of versions */}
-            <PillSelect
-              label="Version"
-              options={availableVersions}
-              value={effectiveVersion}
-              onChange={(v) => {
-                setDatasetVersion(v)
-                setSelectedSubmission(null)
-                setAvailableTrajectories([])
-                setSelectedTrajectory(null)
-                setSelectedTask(null)
-                // Tasks flow reads a version-specific dataset — reset so it reloads.
-                setSelectedDomain(null)
-                setTaskData(null)
-                setSelectedTaskDetail(null)
-              }}
-            />
+            <div className="version-selector-row">
+              <PillSelect
+                label="Version"
+                options={availableVersions}
+                value={effectiveVersion}
+                onChange={(v) => {
+                  setDatasetVersion(v)
+                  setSelectedSubmission(null)
+                  setAvailableTrajectories([])
+                  setSelectedTrajectory(null)
+                  setSelectedTask(null)
+                  // Tasks flow reads a version-specific dataset — reset so it reloads.
+                  setSelectedDomain(null)
+                  setTaskData(null)
+                  setSelectedTaskDetail(null)
+                }}
+              />
+              <VersionInfo />
+            </div>
           </div>
         </div>
 
