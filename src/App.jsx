@@ -169,7 +169,7 @@ function App() {
                           <a href="https://openreview.net/forum?id=qG8g00zRZa" target="_blank" rel="noopener noreferrer" className="news-item">
                             <div className="news-icon">🎓</div>
                             <div className="news-text">
-                              <strong>SusVibes accepted at ICML 2026 and will be presented in Seoul!</strong>
+                              <strong>SusVibes accepted at ICML 2026 in Seoul!</strong>
                               <span>Jul 9, 2026</span>
                             </div>
                             <div className="news-arrow">→</div>

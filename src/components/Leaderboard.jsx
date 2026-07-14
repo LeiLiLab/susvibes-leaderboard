@@ -185,8 +185,9 @@ const Leaderboard = () => {
   // Info tooltip state
   const [showFilterInfo, setShowFilterInfo] = useState(false)
 
-  // Dataset version filter (temporary v0.0 -> v1.0 migration toggle), keyed off
-  // each submission's methodology.susvibes_version. Default 'v1.0'.
+  // Dataset version filter. v0.0 and v1.0 are different task sets ranked separately, both
+  // kept selectable; keyed off each submission's methodology.susvibes_version (required by
+  // schema.json, so the 'v1.0' fallbacks below only guard malformed data).
   // null until a version is chosen; effectiveVersion falls back to the latest present.
   const [datasetVersion, setDatasetVersion] = useState(null)
 
@@ -215,7 +216,7 @@ const Leaderboard = () => {
 
   // Dataset versions present in the data, newest first; selection falls back to the latest.
   const availableVersions = useMemo(
-    () => sortVersionsDesc([...new Set(Object.values(passKData).map(m => m.version || 'v0.0'))]),
+    () => sortVersionsDesc([...new Set(Object.values(passKData).map(m => m.version || 'v1.0'))]),
     [passKData]
   )
   const effectiveVersion = datasetVersion ?? availableVersions[0] ?? 'v1.0'
@@ -312,7 +313,7 @@ const Leaderboard = () => {
               python: submission.results.python?.cost || null
             },
             isNew: submission.is_new || false,
-            version: submission.methodology?.susvibes_version || 'v0.0',
+            version: submission.methodology?.susvibes_version || 'v1.0',
             agentName: agentName,
             modelName: submission.model_name,
             agentFramework: agentFramework,
@@ -365,7 +366,7 @@ const Leaderboard = () => {
         const domainData = modelData[domain]
 
         // Only this dataset version
-        if ((modelData.version || 'v0.0') !== effectiveVersion) return
+        if ((modelData.version || 'v1.0') !== effectiveVersion) return
 
         // Only include models/frameworks that have valid chart data
         if (domainData && domainData.funcPass1 !== null && domainData.secPass1 !== null) {
@@ -555,7 +556,7 @@ const Leaderboard = () => {
         const domainData = modelData[domain]
 
         // Filter by dataset version
-        if ((modelData.version || 'v0.0') !== effectiveVersion) {
+        if ((modelData.version || 'v1.0') !== effectiveVersion) {
           return
         }
 
@@ -1208,7 +1209,7 @@ const Leaderboard = () => {
                       const modelStats = Object.entries(passKData)
                         .filter(([, data]) => {
                           // Filter by dataset version first
-                          if ((data.version || 'v0.0') !== effectiveVersion) {
+                          if ((data.version || 'v1.0') !== effectiveVersion) {
                             return false
                           }
 

@@ -27,7 +27,7 @@ const TrajectoryVisualizer = () => {
 
   // Dataset versions present in the submissions, newest first; selection falls back to latest.
   const availableVersions = useMemo(
-    () => sortVersionsDesc([...new Set(submissions.map(s => s.methodology?.susvibes_version || 'v0.0'))]),
+    () => sortVersionsDesc([...new Set(submissions.map(s => s.methodology?.susvibes_version || 'v1.0'))]),
     [submissions]
   )
   const effectiveVersion = datasetVersion ?? availableVersions[0] ?? 'v1.0'
@@ -735,14 +735,14 @@ const TrajectoryVisualizer = () => {
                     )}
 
                     {!submissionsLoading && submissions.length > 0 &&
-                      submissions.filter(s => (s.methodology?.susvibes_version || 'v0.0') === effectiveVersion).length === 0 && (
+                      submissions.filter(s => (s.methodology?.susvibes_version || 'v1.0') === effectiveVersion).length === 0 && (
                       <div className="empty-state">
                         <p>No {effectiveVersion} submissions yet.</p>
                       </div>
                     )}
 
                     {!submissionsLoading && submissions
-                      .filter(submission => (submission.methodology?.susvibes_version || 'v0.0') === effectiveVersion)
+                      .filter(submission => (submission.methodology?.susvibes_version || 'v1.0') === effectiveVersion)
                       .map((submission, index) => {
                       const agentName = createAgentName(submission.methodology?.agent_framework, submission.model_name)
                       return (

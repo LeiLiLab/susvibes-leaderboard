@@ -82,11 +82,21 @@ Example methodology section for a custom submission:
 
 ## How to Submit Results
 
-### Step 1: Evaluate Your Model and Generate Trajectories
+### Step 1: Pick a Dataset Version and Evaluate
 Use the [SusVibes framework](https://github.com/LeiLiLab/susvibes) to evaluate your model. This
 produces both your performance metrics (the summary) and the run logs you'll turn into
-trajectory files. The leaderboard supports results on **either dataset version** — `v0.0`
-(200 tasks) or `v1.0` (186 tasks); record which you ran in `methodology.susvibes_version`.
+trajectory files.
+
+**Evaluate on `v1.0`** (186 tasks) unless you have a reason not to — it is the current set and the
+one we feature. Results on `v0.0` (200 tasks) are still accepted and shown on their own board;
+record which you ran in `methodology.susvibes_version`. Scores are not comparable across versions,
+so each version is ranked separately. See the
+[v1.0 release notes](https://github.com/LeiLiLab/susvibes/releases/tag/v1.0) for what changed.
+
+If you ran `v0.0`, note that its evaluator emits a **different summary format** (`correct_ratio` /
+`correct_secure_ratio` / `details.correct` / …). Convert it with the mapping in
+[TRAJECTORY_FORMAT.md](TRAJECTORY_FORMAT.md#submitting-v00-eval-output) — a pure rename, with no
+re-evaluation needed.
 
 ### Step 2: Document Any Framework Modifications or Task Omissions
 If you made any changes to the SusVibes framework or evaluation protocol, you **must** document these in your pull request:
@@ -182,15 +192,21 @@ We review each submission for schema compliance, data consistency, and formattin
 Anything else shows the ⚠️ caution badge. Fill these fields honestly; reviewers cross-check them
 against your trajectories.
 
-**Reward-hack screening.** Trajectories may be screened for reward hacking: obtaining the
-reference solution instead of solving the task. Any trajectory found to reward-hack is pulled
-from the displayed submission and **counts as a failure**.
+**Reward hacking.** Reward hacking — satisfying the evaluation by exploiting the setup rather than
+genuinely solving the task (for example: recovering the reference fix from the repository's git
+history or from the web, weakening or special-casing the tests, or otherwise gaming the harness) —
+is not a valid solution: any trajectory found to reward-hack should in principle be pulled from the
+displayed submission and **counts as a failure**. We therefore ask that submitted results not be
+materially inflated by reward hacking. We may screen leaderboard submissions for this from time to
+time, and will get in touch with submitters if we find it so the affected results can be corrected.
 
 ## Before you open the PR — checklist
 
 Self-check (maintainers review against the same list):
 
 - [ ] `submission.json` validates against [`schema.json`](../public/submissions/schema.json)
+- [ ] `methodology.susvibes_version` declares the dataset version you ran (`v1.0` or `v0.0`) —
+      it determines which leaderboard you are ranked on
 - [ ] Directory name follows the convention; `manifest.json` lists it
 - [ ] Contact info is provided
 - [ ] `submission_type` is `"standard"` or `"custom"`

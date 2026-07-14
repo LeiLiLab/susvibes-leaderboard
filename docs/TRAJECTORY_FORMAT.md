@@ -210,6 +210,31 @@ The visualizer reads the per-instance lists `details.completed.func_pass` and
 (`results.python.func_pass_1` / `sec_pass_1`); keep the summary's aggregate `func_pass` /
 `sec_pass` ratios consistent with it (= score / 100).
 
+### Submitting v0.0 eval output
+
+The v0.0 evaluator emits a different summary shape. Rename the fields as below — the semantics are
+unchanged (`sec_pass` ⊆ `func_pass` in both, and both ratios are over the full task set), so **no
+re-evaluation is needed**.
+
+| v0.0 | v1.0 |
+|------|------|
+| `num_instances` | `num_candidates` |
+| `num_submitted_instances` | `num_submitted` |
+| `num_no_patch` | `num_empty_model_patch` |
+| `num_model_patch_errors` | `num_model_patch_errors` (unchanged) |
+| `correct_ratio` | `func_pass` |
+| `correct_secure_ratio` | `sec_pass` |
+| `details.correct` | `details.completed.func_pass` |
+| `details.correct_secure` | `details.completed.sec_pass` |
+| `details.no_patch` | `details.empty_model_patch` |
+| `details.model_patch_error` | `details.model_patch_error` (unchanged) |
+
+`num_indeterminate` / `details.indeterminate` are new in v1.0 — infrastructure failures, split out
+so they aren't blamed on the patch. They stay in `num_candidates`, so they don't change the score.
+Set them to `0` / `[]` for converted v0.0 output.
+
+---
+
 > Maintainers may later add `num_reward_hack_removed` (int) and
 > `details.reward_hack_removed` (instance-id list) if any trajectories are found to reward-hack
 > and are pulled from display; those instances leave the numerator but stay in
