@@ -40,7 +40,7 @@ export default function VersionInfo() {
             <h4>Dataset Versions</h4>
             <div className="version-info-item">
               <strong>v0.0</strong>
-              <p>Initial 200-task security benchmark.</p>
+              <p>Initial 200-task security-oriented vibe coding benchmark.</p>
             </div>
             <div className="version-info-item">
               <strong>v1.0</strong>
