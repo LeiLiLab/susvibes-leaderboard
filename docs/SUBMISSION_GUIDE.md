@@ -71,7 +71,7 @@ Example methodology section for a custom submission:
   "references": [
     {
       "title": "Our Custom Agent Implementation",
-      "url": "https://github.com/example/custom-tau-agent",
+      "url": "https://github.com/example/custom-susvibes-agent",
       "type": "github"
     }
   ]

@@ -36,7 +36,7 @@ A JSON array of per-instance records:
 {
   "instance_id": "django__django_<hash>",   // owner__repo_commitHash
   "model_patch": "diff --git ...",           // the agent's predicted patch (unified diff)
-  "model_name_or_path": "gemini/gemini-3-pro-preview",  // model id parsed from the run
+  "model_name_or_path": "gemini/gemini-3-pro-preview",  // model id as your run recorded it
   "run_metadata": { ... },                    // run metadata (below) — NOT a chat message
   "tools": [ ... ],                           // OpenAI tool (function) schemas available to the agent
   "messages": [ ... ]                         // OpenAI messages (below); inline array OR a path
@@ -47,7 +47,7 @@ A JSON array of per-instance records:
 |-------|------|-------|
 | `instance_id` | string | Unique task id. |
 | `model_patch` | string | Prediction patch (may be empty if the agent produced none). |
-| `model_name_or_path` | string | Model id parsed from the run by the converter (litellm id, e.g. `bedrock/zai.glm-5`). Stored metadata — the leaderboard display name comes from `submission.json`'s `model_name`, not this field. |
+| `model_name_or_path` | string | Model id as your run recorded it (e.g. `bedrock/zai.glm-5`). Stored metadata — the leaderboard display name comes from `submission.json`'s `model_name`, not this field. |
 | `run_metadata` | object | Run metadata. Not part of `messages` (see below). |
 | `tools` | array | OpenAI tool (function) schemas available to the agent (see below). |
 | `messages` | array \| string | OpenAI messages **inline**, or a `"messages/<id>.json"` path (split format). |
@@ -76,17 +76,13 @@ Rules:
   observation injected by the harness (initial task seed, final submit result) that has
   no matching model call is represented as a `user` message instead.
 - Display-only metadata (`timestamp`, `cost`, `usage`) may appear as **extra keys** on a
-  message. ms-swift reads only `role`/`content`/`tool_calls`/`tool_call_id` and ignores
-  the rest, so the same file feeds both training and the visualizer.
-
-Inline `<DIR>.trials.json` files are directly loadable by ms-swift (it reads each
-record's `messages` + `tools` keys and ignores `instance_id`/`model_patch`/`model_name_or_path`/`run_metadata`).
+  message; they are ignored by everything that reads the file.
 
 ### `tools` — available tool schemas
 
 The OpenAI tool/function definitions the agent had available for that instance — the
 companion to the `tool_calls` in `messages` (one says *what tools existed*, the other
-*what was actually called*). ms-swift uses it to build the agent/tool-calling prompt.
+*what was actually called*).
 
 ```jsonc
 "tools": [
@@ -101,27 +97,26 @@ companion to the `tool_calls` in `messages` (one says *what tools existed*, the 
 ]
 ```
 
-Source per scaffold: OpenHands stores it verbatim on the system event
-(`history[0].args.tools`); SWE-agent parses it from the `.traj`'s
+Where to find it in your run's logs: OpenHands stores it verbatim on the system event
+(`history[0].args.tools`); SWE-agent has it in the `.traj` under
 `replay_config.agent.tools.command_docs`. The list is the same for every instance of a
-run, but is stored per-record (the OpenAI / ms-swift convention).
+run, but is stored per-record (the OpenAI convention).
 
 ### `run_metadata` — run metadata
 
 `run_metadata` is **not** an OpenAI role, so run metadata lives here, not in `messages`.
-It has a small **unified core** that every converter normalises and emits identically,
-plus optional **scaffold-specific extras** that each converter keeps as-is (not aligned
-across scaffolds, present only when that scaffold provides them).
+It has a small **required core** — four fields, same meaning whatever scaffold you ran —
+plus optional **scaffold-specific extras**.
 
 ```jsonc
 "run_metadata": {
-  // --- unified core (always present, same meaning for every scaffold) ---
+  // --- required core (always present, same meaning for every scaffold) ---
   "subtype": "completed",        // "completed" | "error" | "incomplete"
   "is_error": false,
   "num_turns": 16,
   "total_cost_usd": 1.81,        // null if the scaffold didn't track cost
 
-  // --- scaffold-specific extras (kept as-is; may differ or be absent) ---
+  // --- scaffold-specific extras (optional; include what your scaffold reports) ---
   "exit_status": "submitted",
   "tokens_sent": 790544,
   "tokens_received": 7864,
@@ -129,7 +124,7 @@ across scaffolds, present only when that scaffold provides them).
 }
 ```
 
-**Unified core** — guaranteed on every record:
+**Required core** — include all four on every record:
 
 | Field | Meaning |
 |-------|---------|
@@ -138,14 +133,14 @@ across scaffolds, present only when that scaffold provides them).
 | `num_turns` | Number of assistant turns. |
 | `total_cost_usd` | Total LLM cost in USD (`null` if untracked). |
 
-**Scaffold-specific extras** — preserved verbatim by each converter, *not* a cross-scaffold
-contract (semantics/availability vary; consumers must treat them as best-effort):
+**Scaffold-specific extras** — all optional. Include the ones your scaffold reports, as it
+reports them; omit the rest.
 
 | Field | Notes |
 |-------|-------|
-| `exit_status` | Native for SWE-agent (`submitted`, `submitted (exit_cost)`, ...). Derived for OpenHands: `submitted` iff a `finish` action exists (≡ `error is None`), else the `error` string maps to `max_iterations` / `stuck_in_loop` / `error`. |
+| `exit_status` | How the run ended, in your scaffold's own vocabulary (e.g. SWE-agent's `submitted`, `submitted (exit_cost)`). |
 | `tokens_sent` / `tokens_received` | Cumulative prompt / completion tokens (`sent` includes cached). |
-| `tool_execution_time_s` | Summed tool wall-clock (SWE-agent per-step `execution_time`; OpenHands action→observation timestamp deltas). |
+| `tool_execution_time_s` | Total wall-clock spent executing tools. |
 
 The visualizer shows `subtype` as **Termination**, `num_turns` as **Turns**, and uses
 `total_cost_usd` / `duration_ms` when present.
@@ -162,7 +157,7 @@ The visualizer shows `subtype` as **Termination**, `num_turns` as **Turns**, and
 ```
 
 **Split** — for large submissions, `messages` is a path; the referenced file holds the
-messages array. The SWE-agent and OpenHands converters both emit this layout:
+messages array:
 
 ```jsonc
 // <DIR>.trials.json
@@ -212,9 +207,7 @@ The visualizer reads the per-instance lists `details.completed.func_pass` and
 
 ### Submitting v0.0 eval output
 
-The v0.0 evaluator emits a different summary shape. Rename the fields as below — the semantics are
-unchanged (`sec_pass` ⊆ `func_pass` in both, and both ratios are over the full task set), so **no
-re-evaluation is needed**.
+The v0.0 evaluator uses different field names for the same values. Rename them as below.
 
 | v0.0 | v1.0 |
 |------|------|
@@ -229,9 +222,7 @@ re-evaluation is needed**.
 | `details.no_patch` | `details.empty_model_patch` |
 | `details.model_patch_error` | `details.model_patch_error` (unchanged) |
 
-`num_indeterminate` / `details.indeterminate` are new in v1.0 — infrastructure failures, split out
-so they aren't blamed on the patch. They stay in `num_candidates`, so they don't change the score.
-Set them to `0` / `[]` for converted v0.0 output.
+`num_indeterminate` and `details.indeterminate` have no v0.0 counterpart — set them to `0` and `[]`.
 
 ---
 
