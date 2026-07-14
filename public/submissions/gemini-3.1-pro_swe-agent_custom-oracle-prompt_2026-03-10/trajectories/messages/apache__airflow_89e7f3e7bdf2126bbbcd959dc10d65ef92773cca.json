@@ -1,0 +1,1027 @@
+[
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_000",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"command\": \"/project -name \\\"base_auth_manager.py\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_000",
+    "content": "/project/airflow/auth/managers/base_auth_manager.py\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_001",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/auth/managers/base_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_001",
+    "content": "#\n# Licensed to the Apache Software Foundation (ASF) under one\n# or more contributor license agreements.  See the NOTICE file\n# distributed with this work for additional information\n# regarding copyright ownership.  The ASF licenses this file\n# to you under the Apache License, Version 2.0 (the\n# \"License\"); you may not use this file except in compliance\n# with the License.  You may obtain a copy of the License at\n#\n#   http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing,\n# software distributed under the License is distributed on an\n# \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY\n# KIND, either express or implied.  See the License for the\n# specific language governing permissions and limitations\n# under the License.\nfrom __future__ import annotations\n\nfrom abc import abstractmethod\nfrom functools import cached_property\nfrom typing import TYPE_CHECKING, Container, Literal, Sequence\n\nfrom sqlalchemy import select\n\nfrom airflow.auth.managers.models.resource_details import (\n    DagDetails,\n)\nfrom airflow.exceptions import AirflowException\nfrom airflow.models import DagModel\nfrom airflow.security.permissions import ACTION_CAN_ACCESS_MENU\nfrom airflow.utils.log.logging_mixin import LoggingMixin\nfrom airflow.utils.session import NEW_SESSION, provide_session\n\nif TYPE_CHECKING:\n    from flask import Blueprint\n    from flask_appbuilder.menu import MenuItem\n    from sqlalchemy.orm import Session\n\n    from airflow.auth.managers.models.base_user import BaseUser\n    from airflow.auth.managers.models.batch_apis import (\n        IsAuthorizedConnectionRequest,\n        IsAuthorizedDagRequest,\n        IsAuthorizedPoolRequest,\n        IsAuthorizedVariableRequest,\n    )\n    from airflow.auth.managers.models.resource_details import (\n        AccessView,\n        ConfigurationDetails,\n        ConnectionDetails,\n        DagAccessEntity,\n        DatasetDetails,\n        PoolDetails,\n        VariableDetails,\n    )\n    from airflow.cli.cli_config import CLICommand\n    from airflow.www.extensions.init_appbuilder import AirflowAppBuilder\n    from airflow.www.security_manager import AirflowSecurityManagerV2\n\n\n\n\nclass BaseAuthManager(LoggingMixin):\n    \"\"\"\n    Class to derive in order to implement concrete auth managers.\n\n    Auth managers are responsible for any user management related operation such as login, logout, authz, ...\n\n    :param appbuilder: the flask app builder\n    \"\"\"\n\n    def __init__(self, appbuilder: AirflowAppBuilder) -> None:\n        super().__init__()\n        self.appbuilder = appbuilder\n\n    @staticmethod\n    def get_cli_commands() -> list[CLICommand]:\n        \"\"\"Vends CLI commands to be included in Airflow CLI.\n\n        Override this method to expose commands via Airflow CLI to manage this auth manager.\n        \"\"\"\n        return []\n\n    def get_api_endpoints(self) -> None | Blueprint:\n        \"\"\"Return API endpoint(s) definition for the auth manager.\"\"\"\n        return None\n\n    def get_user_name(self) -> str:\n        \"\"\"Return the username associated to the user in session.\"\"\"\n        user = self.get_user()\n        if not user:\n            self.log.error(\"Calling 'get_user_name()' but the user is not signed in.\")\n            raise AirflowException(\"The user must be signed in.\")\n        return user.get_name()\n\n    def get_user_display_name(self) -> str:\n        \"\"\"Return the user's display name associated to the user in session.\"\"\"\n        return self.get_user_name()\n\n    @abstractmethod\n    def get_user(self) -> BaseUser | None:\n        \"\"\"Return the user associated to the user in session.\"\"\"\n\n    def get_user_id(self) -> str | None:\n        \"\"\"Return the user ID associated to the user in session.\"\"\"\n        user = self.get_user()\n        if not user:\n            self.log.error(\"Calling 'get_user_id()' but the user is not signed in.\")\n            raise AirflowException(\"The user must be signed in.\")\n        if user_id := user.get_id():\n            return str(user_id)\n        return None\n\n    def init(self) -> None:\n        \"\"\"\n        Run operations when Airflow is initializing.\n\n        By default, do nothing.\n        \"\"\"\n\n    @abstractmethod\n    def is_logged_in(self) -> bool:\n        \"\"\"Return whether the user is logged in.\"\"\"\n\n    @abstractmethod\n    def is_authorized_configuration(\n        self,\n        *,\n        method: ResourceMethod,\n        details: ConfigurationDetails | None = None,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to perform a given action on configuration.\n\n        :param method: the method to perform\n        :param details: optional details about the configuration\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    @abstractmethod\n    def is_authorized_connection(\n        self,\n        *,\n        method: ResourceMethod,\n        details: ConnectionDetails | None = None,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to perform a given action on a connection.\n\n        :param method: the method to perform\n        :param details: optional details about the connection\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    @abstractmethod\n    def is_authorized_dag(\n        self,\n        *,\n        method: ResourceMethod,\n        access_entity: DagAccessEntity | None = None,\n        details: DagDetails | None = None,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to perform a given action on a DAG.\n\n        :param method: the method to perform\n        :param access_entity: the kind of DAG information the authorization request is about.\n            If not provided, the authorization request is about the DAG itself\n        :param details: optional details about the DAG\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    @abstractmethod\n    def is_authorized_dataset(\n        self,\n        *,\n        method: ResourceMethod,\n        details: DatasetDetails | None = None,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to perform a given action on a dataset.\n\n        :param method: the method to perform\n        :param details: optional details about the dataset\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    @abstractmethod\n    def is_authorized_pool(\n        self,\n        *,\n        method: ResourceMethod,\n        details: PoolDetails | None = None,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to perform a given action on a pool.\n\n        :param method: the method to perform\n        :param details: optional details about the pool\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    @abstractmethod\n    def is_authorized_variable(\n        self,\n        *,\n        method: ResourceMethod,\n        details: VariableDetails | None = None,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to perform a given action on a variable.\n\n        :param method: the method to perform\n        :param details: optional details about the variable\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    @abstractmethod\n    def is_authorized_view(\n        self,\n        *,\n        access_view: AccessView,\n        user: BaseUser | None = None,\n    ) -> bool:\n        \"\"\"\n        Return whether the user is authorized to access a read-only state of the installation.\n\n        :param access_view: the specific read-only view/state the authorization request is about.\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n\n    def is_authorized_custom_view(\n        self, *, fab_action_name: str, fab_resource_name: str, user: BaseUser | None = None\n    ):\n        \"\"\"\n        Return whether the user is authorized to perform a given action on a custom view.\n\n        A custom view is a view defined as part of the auth manager. This view is then only available when\n        the auth manager is used as part of the environment.\n\n        By default, it throws an exception because auth managers do not define custom views by default.\n        If an auth manager defines some custom views, it needs to override this method.\n\n        :param fab_action_name: the name of the FAB action defined in the view in ``base_permissions``\n        :param fab_resource_name: the name of the FAB resource defined in the view in\n            ``class_permission_name``\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n        \"\"\"\n        raise AirflowException(f\"The resource `{fab_resource_name}` does not exist in the environment.\")\n\n    def batch_is_authorized_connection(\n        self,\n        requests: Sequence[IsAuthorizedConnectionRequest],\n    ) -> bool:\n        \"\"\"\n        Batch version of ``is_authorized_connection``.\n\n        By default, calls individually the ``is_authorized_connection`` API on each item in the list of\n        requests, which can lead to some poor performance. It is recommended to override this method in the auth\n        manager implementation to provide a more efficient implementation.\n\n        :param requests: a list of requests containing the parameters for ``is_authorized_connection``\n        \"\"\"\n        return all(\n            self.is_authorized_connection(method=request[\"method\"], details=request.get(\"details\"))\n            for request in requests\n        )\n\n    def batch_is_authorized_dag(\n        self,\n        requests: Sequence[IsAuthorizedDagRequest],\n    ) -> bool:\n        \"\"\"\n        Batch version of ``is_authorized_dag``.\n\n        By default, calls individually the ``is_authorized_dag`` API on each item in the list of requests.\n        Can lead to some poor performance. It is recommended to override this method in the auth manager\n        implementation to provide a more efficient implementation.\n\n        :param requests: a list of requests containing the parameters for ``is_authorized_dag``\n        \"\"\"\n        return all(\n            self.is_authorized_dag(\n                method=request[\"method\"],\n                access_entity=request.get(\"access_entity\"),\n                details=request.get(\"details\"),\n            )\n            for request in requests\n        )\n\n    def batch_is_authorized_pool(\n        self,\n        requests: Sequence[IsAuthorizedPoolRequest],\n    ) -> bool:\n        \"\"\"\n        Batch version of ``is_authorized_pool``.\n\n        By default, calls individually the ``is_authorized_pool`` API on each item in the list of\n        requests. Can lead to some poor performance. It is recommended to override this method in the auth\n        manager implementation to provide a more efficient implementation.\n\n        :param requests: a list of requests containing the parameters for ``is_authorized_pool``\n        \"\"\"\n        return all(\n            self.is_authorized_pool(method=request[\"method\"], details=request.get(\"details\"))\n            for request in requests\n        )\n\n    def batch_is_authorized_variable(\n        self,\n        requests: Sequence[IsAuthorizedVariableRequest],\n    ) -> bool:\n        \"\"\"\n        Batch version of ``is_authorized_variable``.\n\n        By default, calls individually the ``is_authorized_variable`` API on each item in the list of\n        requests. Can lead to some poor performance. It is recommended to override this method in the auth\n        manager implementation to provide a more efficient implementation.\n\n        :param requests: a list of requests containing the parameters for ``is_authorized_variable``\n        \"\"\"\n        return all(\n            self.is_authorized_variable(method=request[\"method\"], details=request.get(\"details\"))\n            for request in requests\n        )\n\n    @provide_session\n    def get_permitted_dag_ids(\n        self,\n        *,\n        methods: Container[ResourceMethod] | None = None,\n        user=None,\n        session: Session = NEW_SESSION,\n    ) -> set[str]:\n        \"\"\"\n        Get readable or writable DAGs for user.\n\n        By default, reads all the DAGs and check individually if the user has permissions to access the DAG.\n        Can lead to some poor performance. It is recommended to override this method in the auth manager\n        implementation to provide a more efficient implementation.\n        \"\"\"\n        if not methods:\n            methods = [\"PUT\", \"GET\"]\n\n        dag_ids = {dag.dag_id for dag in session.execute(select(DagModel.dag_id))}\n\n        if (\"GET\" in methods and self.is_authorized_dag(method=\"GET\", user=user)) or (\n            \"PUT\" in methods and self.is_authorized_dag(method=\"PUT\", user=user)\n        ):\n            # If user is authorized to read/edit all DAGs, return all DAGs\n            return dag_ids\n\n        def _is_permitted_dag_id(method: ResourceMethod, methods: Container[ResourceMethod], dag_id: str):\n            return method in methods and self.is_authorized_dag(\n                method=method, details=DagDetails(id=dag_id), user=user\n            )\n\n        return {\n            dag_id\n            for dag_id in dag_ids\n            if _is_permitted_dag_id(\"GET\", methods, dag_id) or _is_permitted_dag_id(\"PUT\", methods, dag_id)\n        }\n\n    def filter_permitted_menu_items(self, menu_items: list[MenuItem]) -> list[MenuItem]:\n        \"\"\"\n        Filter menu items based on user permissions.\n\n        :param menu_items: list of all menu items\n        \"\"\"\n        items = filter(\n            lambda item: self.security_manager.has_access(ACTION_CAN_ACCESS_MENU, item.name), menu_items\n        )\n        accessible_items = []\n        for menu_item in items:\n            if menu_item.childs:\n                accessible_children = []\n                for child in menu_item.childs:\n                    if self.security_manager.has_access(ACTION_CAN_ACCESS_MENU, child.name):\n                        accessible_children.append(child)\n                menu_item.childs = accessible_children\n            accessible_items.append(menu_item)\n        return accessible_items\n\n    @abstractmethod\n    def get_url_login(self, **kwargs) -> str:\n        \"\"\"Return the login page url.\"\"\"\n\n    @abstractmethod\n    def get_url_logout(self) -> str:\n        \"\"\"Return the logout page url.\"\"\"\n\n    def get_url_user_profile(self) -> str | None:\n        \"\"\"\n        Return the url to a page displaying info about the current user.\n\n        By default, return None.\n        \"\"\"\n        return None\n\n    @cached_property\n    def security_manager(self) -> AirflowSecurityManagerV2:\n        \"\"\"\n        Return the security manager.\n\n        By default, Airflow comes with the default security manager\n        ``airflow.www.security_manager.AirflowSecurityManagerV2``. The auth manager might need to extend this\n        default security manager for its own purposes.\n\n        By default, return the default AirflowSecurityManagerV2.\n        \"\"\"\n        from airflow.www.security_manager import AirflowSecurityManagerV2\n\n        return AirflowSecurityManagerV2(self.appbuilder)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_002",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/auth/managers/base_auth_manager.py   --old_str 'from typing import TYPE_CHECKING, Container, Literal, Sequence' --new_str 'from typing import TYPE_CHECKING, Container, Literal, Sequence\\n\\nResourceMethod = Literal[\\\"GET\\\", \\\"POST\\\", \\\"PUT\\\", \\\"DELETE\\\"]'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_002",
+    "content": "The file /project/airflow/auth/managers/base_auth_manager.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/auth/managers/base_auth_manager.py:\n    17\t# under the License.\n    18\tfrom __future__ import annotations\n    19\t\n    20\tfrom abc import abstractmethod\n    21\tfrom functools import cached_property\n    22\tfrom typing import TYPE_CHECKING, Container, Literal, Sequence\n    23\t\n    24\tResourceMethod = Literal[\"GET\", \"POST\", \"PUT\", \"DELETE\"]\n    25\t\n    26\tfrom sqlalchemy import select\n    27\t\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_003",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/auth/managers/utils/fab.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_003",
+    "content": "#\n# Licensed to the Apache Software Foundation (ASF) under one\n# or more contributor license agreements.  See the NOTICE file\n# distributed with this work for additional information\n# regarding copyright ownership.  The ASF licenses this file\n# to you under the Apache License, Version 2.0 (the\n# \"License\"); you may not use this file except in compliance\n# with the License.  You may obtain a copy of the License at\n#\n#   http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing,\n# software distributed under the License is distributed on an\n# \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY\n# KIND, either express or implied.  See the License for the\n# specific language governing permissions and limitations\n# under the License.\nfrom __future__ import annotations\n\nfrom typing import TYPE_CHECKING\n\nfrom airflow.security.permissions import (\n    ACTION_CAN_ACCESS_MENU,\n    ACTION_CAN_CREATE,\n    ACTION_CAN_DELETE,\n    ACTION_CAN_EDIT,\n    ACTION_CAN_READ,\n)\n\nif TYPE_CHECKING:\n    from airflow.auth.managers.base_auth_manager import ResourceMethod\n\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_004",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/auth/managers/utils/fab.py   --old_str 'if TYPE_CHECKING:\\n    from airflow.auth.managers.base_auth_manager import ResourceMethod' --new_str 'if TYPE_CHECKING:\\n    from airflow.auth.managers.base_auth_manager import ResourceMethod\\n\\nMETHOD_TO_FAB_ACTION_MAP: dict[ResourceMethod, str] = {\\n    \\\"POST\\\": ACTION_CAN_CREATE,\\n    \\\"GET\\\": ACTION_CAN_READ,\\n    \\\"PUT\\\": ACTION_CAN_EDIT,\\n    \\\"DELETE\\\": ACTION_CAN_DELETE,\\n}\\n\\ndef get_fab_action_from_method_map() -> dict[ResourceMethod, str]:\\n    return METHOD_TO_FAB_ACTION_MAP\\n\\ndef get_method_from_fab_action_map() -> dict[str, ResourceMethod]:\\n    return {v: k for k, v in METHOD_TO_FAB_ACTION_MAP.items()}'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_004",
+    "content": "The file /project/airflow/auth/managers/utils/fab.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/auth/managers/utils/fab.py:\n    25\t    ACTION_CAN_DELETE,\n    26\t    ACTION_CAN_EDIT,\n    27\t    ACTION_CAN_READ,\n    28\t)\n    29\t\n    30\tif TYPE_CHECKING:\n    31\t    from airflow.auth.managers.base_auth_manager import ResourceMethod\n    32\t\n    33\tMETHOD_TO_FAB_ACTION_MAP: dict[ResourceMethod, str] = {\n    34\t    \"POST\": ACTION_CAN_CREATE,\n    35\t    \"GET\": ACTION_CAN_READ,\n    36\t    \"PUT\": ACTION_CAN_EDIT,\n    37\t    \"DELETE\": ACTION_CAN_DELETE,\n    38\t}\n    39\t\n    40\tdef get_fab_action_from_method_map() -> dict[ResourceMethod, str]:\n    41\t    return METHOD_TO_FAB_ACTION_MAP\n    42\t\n    43\tdef get_method_from_fab_action_map() -> dict[str, ResourceMethod]:\n    44\t    return {v: k for k, v in METHOD_TO_FAB_ACTION_MAP.items()}\n    45\t\n    46\t\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_005",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"command\": \"/project -name \\\"test_fab.py\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_006",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"command\": \"/project -name \\\"*fab*.py\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_006",
+    "content": "/project/airflow/api_connexion/endpoints/forward_to_fab_endpoint.py\n/project/airflow/auth/managers/utils/fab.py\n/project/airflow/migrations/versions/0057_1_10_13_add_fab_tables.py\n/project/airflow/migrations/versions/0058_1_10_13_increase_length_of_fab_ab_view_menu_.py\n/project/airflow/migrations/versions/0106_2_3_0_update_migration_for_fab_tables_to_add_missing_constraints.py\n/project/airflow/migrations/versions/0118_2_4_2_add_missing_autoinc_fab.py\n/project/airflow/providers/fab/auth_manager/fab_auth_manager.py\n/project/docs/apache-airflow-providers-fab/img/diagram_fab_auth_manager_airflow_architecture.py\n/project/tests/api_connexion/endpoints/test_forward_to_fab_endpoint.py\n/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_007",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -A 10 \\\"def test_is_authorized\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_007",
+    "content": "    def test_is_authorized_dag(\n        self, method, dag_access_entity, dag_details, user_permissions, expected_result, auth_manager\n    ):\n        user = Mock()\n        user.perms = user_permissions\n        result = auth_manager.is_authorized_dag(\n            method=method, access_entity=dag_access_entity, details=dag_details, user=user\n        )\n        assert result == expected_result\n\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_008",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/providers/fab/auth_manager/fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_008",
+    "content": "#\n# Licensed to the Apache Software Foundation (ASF) under one\n# or more contributor license agreements.  See the NOTICE file\n# distributed with this work for additional information\n# regarding copyright ownership.  The ASF licenses this file\n# to you under the Apache License, Version 2.0 (the\n# \"License\"); you may not use this file except in compliance\n# with the License.  You may obtain a copy of the License at\n#\n#   http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing,\n# software distributed under the License is distributed on an\n# \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY\n# KIND, either express or implied.  See the License for the\n# specific language governing permissions and limitations\n# under the License.\nfrom __future__ import annotations\n\nimport argparse\nfrom functools import cached_property\nfrom pathlib import Path\nfrom typing import TYPE_CHECKING, Container\n\nfrom connexion import FlaskApi\nfrom flask import Blueprint, url_for\nfrom sqlalchemy import select\nfrom sqlalchemy.orm import Session, joinedload\n\nfrom airflow.auth.managers.base_auth_manager import BaseAuthManager, ResourceMethod\nfrom airflow.auth.managers.models.resource_details import (\n    AccessView,\n    ConfigurationDetails,\n    ConnectionDetails,\n    DagAccessEntity,\n    DagDetails,\n    DatasetDetails,\n    PoolDetails,\n    VariableDetails,\n)\nfrom airflow.auth.managers.utils.fab import get_fab_action_from_method_map, get_method_from_fab_action_map\nfrom airflow.cli.cli_config import (\n    DefaultHelpParser,\n    GroupCommand,\n)\nfrom airflow.configuration import conf\nfrom airflow.exceptions import AirflowException\nfrom airflow.models import DagModel\nfrom airflow.providers.fab.auth_manager.cli_commands.definition import (\n    ROLES_COMMANDS,\n    SYNC_PERM_COMMAND,\n    USERS_COMMANDS,\n)\nfrom airflow.providers.fab.auth_manager.models import Permission, Role, User\nfrom airflow.security import permissions\nfrom airflow.security.permissions import (\n    RESOURCE_AUDIT_LOG,\n    RESOURCE_CLUSTER_ACTIVITY,\n    RESOURCE_CONFIG,\n    RESOURCE_CONNECTION,\n    RESOURCE_DAG,\n    RESOURCE_DAG_CODE,\n    RESOURCE_DAG_DEPENDENCIES,\n    RESOURCE_DAG_PREFIX,\n    RESOURCE_DAG_RUN,\n    RESOURCE_DAG_WARNING,\n    RESOURCE_DATASET,\n    RESOURCE_DOCS,\n    RESOURCE_IMPORT_ERROR,\n    RESOURCE_JOB,\n    RESOURCE_PLUGIN,\n    RESOURCE_POOL,\n    RESOURCE_PROVIDER,\n    RESOURCE_SLA_MISS,\n    RESOURCE_TASK_INSTANCE,\n    RESOURCE_TASK_LOG,\n    RESOURCE_TASK_RESCHEDULE,\n    RESOURCE_TRIGGER,\n    RESOURCE_VARIABLE,\n    RESOURCE_WEBSITE,\n    RESOURCE_XCOM,\n)\nfrom airflow.utils.session import NEW_SESSION, provide_session\nfrom airflow.utils.yaml import safe_load\nfrom airflow.www.constants import SWAGGER_BUNDLE, SWAGGER_ENABLED\nfrom airflow.www.extensions.init_views import _CustomErrorRequestBodyValidator, _LazyResolver\n\nif TYPE_CHECKING:\n    from airflow.auth.managers.models.base_user import BaseUser\n    from airflow.cli.cli_config import (\n        CLICommand,\n    )\n    from airflow.providers.fab.auth_manager.security_manager.override import FabAirflowSecurityManagerOverride\n\n_MAP_DAG_ACCESS_ENTITY_TO_FAB_RESOURCE_TYPE: dict[DagAccessEntity, tuple[str, ...]] = {\n    DagAccessEntity.AUDIT_LOG: (RESOURCE_AUDIT_LOG,),\n    DagAccessEntity.CODE: (RESOURCE_DAG_CODE,),\n    DagAccessEntity.DEPENDENCIES: (RESOURCE_DAG_DEPENDENCIES,),\n    DagAccessEntity.RUN: (RESOURCE_DAG_RUN,),\n    DagAccessEntity.SLA_MISS: (RESOURCE_SLA_MISS,),\n    # RESOURCE_TASK_INSTANCE has been originally misused. RESOURCE_TASK_INSTANCE referred to task definition\n    # AND task instances without making the difference\n    # To be backward compatible, we translate DagAccessEntity.TASK_INSTANCE to RESOURCE_TASK_INSTANCE AND\n    # RESOURCE_DAG_RUN\n    # See https://github.com/apache/airflow/pull/34317#discussion_r1355917769\n    DagAccessEntity.TASK: (RESOURCE_TASK_INSTANCE,),\n    DagAccessEntity.TASK_INSTANCE: (RESOURCE_DAG_RUN, RESOURCE_TASK_INSTANCE),\n    DagAccessEntity.TASK_LOGS: (RESOURCE_TASK_LOG,),\n    DagAccessEntity.TASK_RESCHEDULE: (RESOURCE_TASK_RESCHEDULE,),\n    DagAccessEntity.WARNING: (RESOURCE_DAG_WARNING,),\n    DagAccessEntity.XCOM: (RESOURCE_XCOM,),\n}\n\n_MAP_ACCESS_VIEW_TO_FAB_RESOURCE_TYPE = {\n    AccessView.CLUSTER_ACTIVITY: RESOURCE_CLUSTER_ACTIVITY,\n    AccessView.DOCS: RESOURCE_DOCS,\n    AccessView.IMPORT_ERRORS: RESOURCE_IMPORT_ERROR,\n    AccessView.JOBS: RESOURCE_JOB,\n    AccessView.PLUGINS: RESOURCE_PLUGIN,\n    AccessView.PROVIDERS: RESOURCE_PROVIDER,\n    AccessView.TRIGGERS: RESOURCE_TRIGGER,\n    AccessView.WEBSITE: RESOURCE_WEBSITE,\n}\n\n\nclass FabAuthManager(BaseAuthManager):\n    \"\"\"\n    Flask-AppBuilder auth manager.\n\n    This auth manager is responsible for providing a backward compatible user management experience to users.\n    \"\"\"\n\n    @staticmethod\n    def get_cli_commands() -> list[CLICommand]:\n        \"\"\"Vends CLI commands to be included in Airflow CLI.\"\"\"\n        return [\n            GroupCommand(\n                name=\"users\",\n                help=\"Manage users\",\n                subcommands=USERS_COMMANDS,\n            ),\n            GroupCommand(\n                name=\"roles\",\n                help=\"Manage roles\",\n                subcommands=ROLES_COMMANDS,\n            ),\n            SYNC_PERM_COMMAND,  # not in a command group\n        ]\n\n    def get_api_endpoints(self) -> None | Blueprint:\n        folder = Path(__file__).parents[0].resolve()  # this is airflow/auth/managers/fab/\n        with folder.joinpath(\"openapi\", \"v1.yaml\").open() as f:\n            specification = safe_load(f)\n        return FlaskApi(\n            specification=specification,\n            resolver=_LazyResolver(),\n            base_path=\"/auth/fab/v1\",\n            options={\"swagger_ui\": SWAGGER_ENABLED, \"swagger_path\": SWAGGER_BUNDLE.__fspath__()},\n            strict_validation=True,\n            validate_responses=True,\n            validator_map={\"body\": _CustomErrorRequestBodyValidator},\n        ).blueprint\n\n    def get_user_display_name(self) -> str:\n        \"\"\"Return the user's display name associated to the user in session.\"\"\"\n        user = self.get_user()\n        first_name = user.first_name.strip() if isinstance(user.first_name, str) else \"\"\n        last_name = user.last_name.strip() if isinstance(user.last_name, str) else \"\"\n        return f\"{first_name} {last_name}\".strip()\n\n    def get_user(self) -> User:\n        \"\"\"Return the user associated to the user in session.\"\"\"\n        from flask_login import current_user\n\n        return current_user\n\n    def init(self) -> None:\n        \"\"\"Run operations when Airflow is initializing.\"\"\"\n        self._sync_appbuilder_roles()\n\n    def is_logged_in(self) -> bool:\n        \"\"\"Return whether the user is logged in.\"\"\"\n        return not self.get_user().is_anonymous\n\n\n\n\n\n\n\n\n\n\n\n    @provide_session\n    def get_permitted_dag_ids(\n        self,\n        *,\n        methods: Container[ResourceMethod] | None = None,\n        user=None,\n        session: Session = NEW_SESSION,\n    ) -> set[str]:\n        if not methods:\n            methods = [\"PUT\", \"GET\"]\n\n        if not user:\n            user = self.get_user()\n\n        if not self.is_logged_in():\n            roles = user.roles\n        else:\n            if (\"GET\" in methods and self.is_authorized_dag(method=\"GET\", user=user)) or (\n                \"PUT\" in methods and self.is_authorized_dag(method=\"PUT\", user=user)\n            ):\n                # If user is authorized to read/edit all DAGs, return all DAGs\n                return {dag.dag_id for dag in session.execute(select(DagModel.dag_id))}\n            user_query = session.scalar(\n                select(User)\n                .options(\n                    joinedload(User.roles)\n                    .subqueryload(Role.permissions)\n                    .options(joinedload(Permission.action), joinedload(Permission.resource))\n                )\n                .where(User.id == user.id)\n            )\n            roles = user_query.roles\n\n        map_fab_action_name_to_method_name = get_method_from_fab_action_map()\n        resources = set()\n        for role in roles:\n            for permission in role.permissions:\n                action = permission.action.name\n                if (\n                    action in map_fab_action_name_to_method_name\n                    and map_fab_action_name_to_method_name[action] in methods\n                ):\n                    resource = permission.resource.name\n                    if resource == permissions.RESOURCE_DAG:\n                        return {dag.dag_id for dag in session.execute(select(DagModel.dag_id))}\n                    if resource.startswith(permissions.RESOURCE_DAG_PREFIX):\n                        resources.add(resource[len(permissions.RESOURCE_DAG_PREFIX) :])\n                    else:\n                        resources.add(resource)\n        return {\n            dag.dag_id\n            for dag in session.execute(select(DagModel.dag_id).where(DagModel.dag_id.in_(resources)))\n        }\n\n    @cached_property\n    def security_manager(self) -> FabAirflowSecurityManagerOverride:\n        \"\"\"Return the security manager specific to FAB.\"\"\"\n        from airflow.providers.fab.auth_manager.security_manager.override import (\n            FabAirflowSecurityManagerOverride,\n        )\n\n        sm_from_config = self.appbuilder.get_app.config.get(\"SECURITY_MANAGER_CLASS\")\n        if sm_from_config:\n            if not issubclass(sm_from_config, FabAirflowSecurityManagerOverride):\n                raise Exception(\n                    \"\"\"Your CUSTOM_SECURITY_MANAGER must extend FabAirflowSecurityManagerOverride.\"\"\"\n                )\n            return sm_from_config(self.appbuilder)\n\n        return FabAirflowSecurityManagerOverride(self.appbuilder)\n\n    def get_url_login(self, **kwargs) -> str:\n        \"\"\"Return the login page url.\"\"\"\n        if not self.security_manager.auth_view:\n            raise AirflowException(\"`auth_view` not defined in the security manager.\")\n        if \"next_url\" in kwargs and kwargs[\"next_url\"]:\n            return url_for(f\"{self.security_manager.auth_view.endpoint}.login\", next_url=kwargs[\"next_url\"])\n        else:\n            return url_for(f\"{self.security_manager.auth_view.endpoint}.login\")\n\n    def get_url_logout(self):\n        \"\"\"Return the logout page url.\"\"\"\n        if not self.security_manager.auth_view:\n            raise AirflowException(\"`auth_view` not defined in the security manager.\")\n        return url_for(f\"{self.security_manager.auth_view.endpoint}.logout\")\n\n    def get_url_user_profile(self) -> str | None:\n        \"\"\"Return the url to a page displaying info about the current user.\"\"\"\n        if not self.security_manager.user_view:\n            return None\n        return url_for(f\"{self.security_manager.user_view.endpoint}.userinfo\")\n\n\n\n\n\n    @staticmethod\n    def _get_fab_action(method: ResourceMethod) -> str:\n        \"\"\"\n        Convert the method to a FAB action.\n\n        :param method: the method to convert\n\n        :meta private:\n        \"\"\"\n        fab_action_from_method_map = get_fab_action_from_method_map()\n        if method not in fab_action_from_method_map:\n            raise AirflowException(f\"Unknown method: {method}\")\n        return fab_action_from_method_map[method]\n\n    @staticmethod\n    def _get_fab_resource_types(dag_access_entity: DagAccessEntity) -> tuple[str, ...]:\n        \"\"\"\n        Convert a DAG access entity to a tuple of FAB resource type.\n\n        :param dag_access_entity: the DAG access entity\n\n        :meta private:\n        \"\"\"\n        if dag_access_entity not in _MAP_DAG_ACCESS_ENTITY_TO_FAB_RESOURCE_TYPE:\n            raise AirflowException(f\"Unknown DAG access entity: {dag_access_entity}\")\n        return _MAP_DAG_ACCESS_ENTITY_TO_FAB_RESOURCE_TYPE[dag_access_entity]\n\n    def _resource_name_for_dag(self, dag_id: str) -> str:\n        \"\"\"\n        Return the FAB resource name for a DAG id.\n\n        :param dag_id: the DAG id\n\n        :meta private:\n        \"\"\"\n        root_dag_id = self._get_root_dag_id(dag_id)\n        if root_dag_id == RESOURCE_DAG:\n            return root_dag_id\n        if root_dag_id.startswith(RESOURCE_DAG_PREFIX):\n            return root_dag_id\n        return f\"{RESOURCE_DAG_PREFIX}{root_dag_id}\"\n\n\n\n    def _get_root_dag_id(self, dag_id: str) -> str:\n        \"\"\"\n        Return the root DAG id in case of sub DAG, return the DAG id otherwise.\n\n        :param dag_id: the DAG id\n\n        :meta private:\n        \"\"\"\n        if \".\" in dag_id:\n            return self.appbuilder.get_session.scalar(\n                select(DagModel.dag_id, DagModel.root_dag_id).where(DagModel.dag_id == dag_id).limit(1)\n            )\n        return dag_id\n\n    def _sync_appbuilder_roles(self):\n        \"\"\"\n        Sync appbuilder roles to DB.\n\n        :meta private:\n        \"\"\"\n        # Garbage collect old permissions/views after they have been modified.\n        # Otherwise, when the name of a view or menu is changed, the framework\n        # will add the new Views and Menus names to the backend, but will not\n        # delete the old ones.\n        if conf.getboolean(\n            \"fab\", \"UPDATE_FAB_PERMS\", fallback=conf.getboolean(\"webserver\", \"UPDATE_FAB_PERMS\")\n        ):\n            self.security_manager.sync_roles()\n\n\ndef get_parser() -> argparse.ArgumentParser:\n    \"\"\"Generate documentation; used by Sphinx argparse.\"\"\"\n    from airflow.cli.cli_parser import AirflowHelpFormatter, _add_command\n\n    parser = DefaultHelpParser(prog=\"airflow\", formatter_class=AirflowHelpFormatter)\n    subparsers = parser.add_subparsers(dest=\"subcommand\", metavar=\"GROUP_OR_COMMAND\")\n    for group_command in FabAuthManager.get_cli_commands():\n        _add_command(subparsers, group_command)\n    return parser\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_009",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -A 20 \\\"def test_is_authorized\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_009",
+    "content": "    def test_is_authorized_dag(\n        self, method, dag_access_entity, dag_details, user_permissions, expected_result, auth_manager\n    ):\n        user = Mock()\n        user.perms = user_permissions\n        result = auth_manager.is_authorized_dag(\n            method=method, access_entity=dag_access_entity, details=dag_details, user=user\n        )\n        assert result == expected_result\n\n\n    @pytest.mark.db_test\n    def test_security_manager_return_fab_security_manager_override(self, auth_manager_with_appbuilder):\n        assert isinstance(auth_manager_with_appbuilder.security_manager, FabAirflowSecurityManagerOverride)\n\n    @pytest.mark.db_test\n    def test_security_manager_return_custom_provided(self, flask_app, auth_manager_with_appbuilder):\n        class TestSecurityManager(FabAirflowSecurityManagerOverride):\n            pass\n\n        flask_app.config[\"SECURITY_MANAGER_CLASS\"] = TestSecurityManager\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_010",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"def test_is_authorized\\\" /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_010",
+    "content": "241:    def test_is_authorized_dag(\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_011",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"is_authorized\\\" /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_011",
+    "content": "53:    \"is_authorized_configuration\": RESOURCE_CONFIG,\n54:    \"is_authorized_connection\": RESOURCE_CONNECTION,\n55:    \"is_authorized_dataset\": RESOURCE_DATASET,\n56:    \"is_authorized_variable\": RESOURCE_VARIABLE,\n241:    def test_is_authorized_dag(\n246:        result = auth_manager.is_authorized_dag(\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_012",
+        "type": "function",
+        "function": {
+          "name": "sed",
+          "arguments": "{\"command\": \"-n '50,100p' /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_012",
+    "content": "from airflow.www.extensions.init_appbuilder import init_appbuilder\n\nIS_AUTHORIZED_METHODS_SIMPLE = {\n    \"is_authorized_configuration\": RESOURCE_CONFIG,\n    \"is_authorized_connection\": RESOURCE_CONNECTION,\n    \"is_authorized_dataset\": RESOURCE_DATASET,\n    \"is_authorized_variable\": RESOURCE_VARIABLE,\n}\n\n\n@pytest.fixture\ndef auth_manager():\n    return FabAuthManager(None)\n\n\n@pytest.fixture\ndef flask_app():\n    return Flask(__name__)\n\n\n@pytest.fixture\ndef auth_manager_with_appbuilder(flask_app):\n    appbuilder = init_appbuilder(flask_app)\n    return FabAuthManager(appbuilder)\n\n\n@pytest.mark.db_test\nclass TestFabAuthManager:\n    @pytest.mark.parametrize(\n        \"id,first_name,last_name,username,email,expected\",\n        [\n            (1, \"First\", \"Last\", None, None, \"First Last\"),\n            (1, \"First\", None, \"user\", None, \"First\"),\n            (1, None, \"Last\", \"user\", \"email\", \"Last\"),\n            (1, None, None, None, \"email\", \"\"),\n        ],\n    )\n    @mock.patch.object(FabAuthManager, \"get_user\")\n    def test_get_user_display_name(\n        self, mock_get_user, id, first_name, last_name, username, email, expected, auth_manager\n    ):\n        user = User()\n        user.id = id\n        user.first_name = first_name\n        user.last_name = last_name\n        user.username = username\n        user.email = email\n        mock_get_user.return_value = user\n\n        assert auth_manager.get_user_display_name() == expected\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_013",
+        "type": "function",
+        "function": {
+          "name": "sed",
+          "arguments": "{\"command\": \"-n '100,200p' /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_013",
+    "content": "\n    @mock.patch(\"flask_login.utils._get_user\")\n    def test_get_user(self, mock_current_user, auth_manager):\n        user = Mock()\n        user.is_anonymous.return_value = True\n        mock_current_user.return_value = user\n\n        assert auth_manager.get_user() == user\n\n    @mock.patch.object(FabAuthManager, \"get_user\")\n    def test_is_logged_in(self, mock_get_user, auth_manager):\n        user = Mock()\n        user.is_anonymous.return_value = True\n        mock_get_user.return_value = user\n\n        assert auth_manager.is_logged_in() is False\n\n\n    @pytest.mark.parametrize(\n        \"method, dag_access_entity, dag_details, user_permissions, expected_result\",\n        [\n            # Scenario 1 #\n            # With global permissions on Dags\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # On specific DAG with global permissions on Dags\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # With permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id2\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on DAGs\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, \"resource_test\")],\n                False,\n            ),\n            # Scenario 2 #\n            # With global permissions on DAGs\n            (\n                \"GET\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG), (ACTION_CAN_READ, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_014",
+        "type": "function",
+        "function": {
+          "name": "sed",
+          "arguments": "{\"command\": \"-n '200,300p' /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_014",
+    "content": "                [\n                    (ACTION_CAN_READ, \"DAG:test_dag_id\"),\n                    (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE),\n                    (ACTION_CAN_READ, RESOURCE_DAG_RUN),\n                ],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"DELETE\",\n                DagAccessEntity.TASK,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_DELETE, RESOURCE_TASK_INSTANCE)],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without permissions to edit the DAG\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                False,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_LOGS,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n        ],\n    )\n    def test_is_authorized_dag(\n        self, method, dag_access_entity, dag_details, user_permissions, expected_result, auth_manager\n    ):\n        user = Mock()\n        user.perms = user_permissions\n        result = auth_manager.is_authorized_dag(\n            method=method, access_entity=dag_access_entity, details=dag_details, user=user\n        )\n        assert result == expected_result\n\n\n    @pytest.mark.db_test\n    def test_security_manager_return_fab_security_manager_override(self, auth_manager_with_appbuilder):\n        assert isinstance(auth_manager_with_appbuilder.security_manager, FabAirflowSecurityManagerOverride)\n\n    @pytest.mark.db_test\n    def test_security_manager_return_custom_provided(self, flask_app, auth_manager_with_appbuilder):\n        class TestSecurityManager(FabAirflowSecurityManagerOverride):\n            pass\n\n        flask_app.config[\"SECURITY_MANAGER_CLASS\"] = TestSecurityManager\n        assert isinstance(auth_manager_with_appbuilder.security_manager, TestSecurityManager)\n\n    @pytest.mark.db_test\n    def test_security_manager_wrong_inheritance_raise_exception(\n        self, flask_app, auth_manager_with_appbuilder\n    ):\n        class TestSecurityManager:\n            pass\n\n        flask_app.config[\"SECURITY_MANAGER_CLASS\"] = TestSecurityManager\n\n        with pytest.raises(\n            Exception, match=\"Your CUSTOM_SECURITY_MANAGER must extend FabAirflowSecurityManagerOverride.\"\n        ):\n            auth_manager_with_appbuilder.security_manager\n\n    @pytest.mark.db_test\n    def test_get_url_login_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n        with pytest.raises(AirflowException, match=\"`auth_view` not defined in the security manager.\"):\n            auth_manager_with_appbuilder.get_url_login()\n\n    @pytest.mark.db_test\n    @mock.patch(\"airflow.providers.fab.auth_manager.fab_auth_manager.url_for\")\n    def test_get_url_login(self, mock_url_for, auth_manager_with_appbuilder):\n        auth_manager_with_appbuilder.security_manager.auth_view = Mock()\n        auth_manager_with_appbuilder.security_manager.auth_view.endpoint = \"test_endpoint\"\n        auth_manager_with_appbuilder.get_url_login()\n        mock_url_for.assert_called_once_with(\"test_endpoint.login\")\n\n    @pytest.mark.db_test\n    @mock.patch(\"airflow.providers.fab.auth_manager.fab_auth_manager.url_for\")\n    def test_get_url_login_with_next(self, mock_url_for, auth_manager_with_appbuilder):\n        auth_manager_with_appbuilder.security_manager.auth_view = Mock()\n        auth_manager_with_appbuilder.security_manager.auth_view.endpoint = \"test_endpoint\"\n        auth_manager_with_appbuilder.get_url_login(next_url=\"next_url\")\n        mock_url_for.assert_called_once_with(\"test_endpoint.login\", next_url=\"next_url\")\n\n    @pytest.mark.db_test\n    def test_get_url_logout_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_015",
+        "type": "function",
+        "function": {
+          "name": "sed",
+          "arguments": "{\"command\": \"-n '300,400p' /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_015",
+    "content": "    def test_get_url_logout_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n        with pytest.raises(AirflowException, match=\"`auth_view` not defined in the security manager.\"):\n            auth_manager_with_appbuilder.get_url_logout()\n\n    @pytest.mark.db_test\n    @mock.patch(\"airflow.providers.fab.auth_manager.fab_auth_manager.url_for\")\n    def test_get_url_logout(self, mock_url_for, auth_manager_with_appbuilder):\n        auth_manager_with_appbuilder.security_manager.auth_view = Mock()\n        auth_manager_with_appbuilder.security_manager.auth_view.endpoint = \"test_endpoint\"\n        auth_manager_with_appbuilder.get_url_logout()\n        mock_url_for.assert_called_once_with(\"test_endpoint.logout\")\n\n    @pytest.mark.db_test\n    def test_get_url_user_profile_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n        assert auth_manager_with_appbuilder.get_url_user_profile() is None\n\n    @pytest.mark.db_test\n    @mock.patch(\"airflow.providers.fab.auth_manager.fab_auth_manager.url_for\")\n    def test_get_url_user_profile(self, mock_url_for, auth_manager_with_appbuilder):\n        expected_url = \"test_url\"\n        mock_url_for.return_value = expected_url\n        auth_manager_with_appbuilder.security_manager.user_view = Mock()\n        auth_manager_with_appbuilder.security_manager.user_view.endpoint = \"test_endpoint\"\n        actual_url = auth_manager_with_appbuilder.get_url_user_profile()\n        mock_url_for.assert_called_once_with(\"test_endpoint.userinfo\")\n        assert actual_url == expected_url\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_016",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"is_authorized_configuration\\\" /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_016",
+    "content": "53:    \"is_authorized_configuration\": RESOURCE_CONFIG,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_017",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"IS_AUTHORIZED_METHODS_SIMPLE\\\" /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_017",
+    "content": "52:IS_AUTHORIZED_METHODS_SIMPLE = {\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_018",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"IS_AUTHORIZED_METHODS_SIMPLE\\\" /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_018",
+    "content": "52:IS_AUTHORIZED_METHODS_SIMPLE = {\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_019",
+        "type": "function",
+        "function": {
+          "name": "sed",
+          "arguments": "{\"command\": \"-n '100,150p' /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_019",
+    "content": "\n    @mock.patch(\"flask_login.utils._get_user\")\n    def test_get_user(self, mock_current_user, auth_manager):\n        user = Mock()\n        user.is_anonymous.return_value = True\n        mock_current_user.return_value = user\n\n        assert auth_manager.get_user() == user\n\n    @mock.patch.object(FabAuthManager, \"get_user\")\n    def test_is_logged_in(self, mock_get_user, auth_manager):\n        user = Mock()\n        user.is_anonymous.return_value = True\n        mock_get_user.return_value = user\n\n        assert auth_manager.is_logged_in() is False\n\n\n    @pytest.mark.parametrize(\n        \"method, dag_access_entity, dag_details, user_permissions, expected_result\",\n        [\n            # Scenario 1 #\n            # With global permissions on Dags\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # On specific DAG with global permissions on Dags\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # With permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_020",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"IS_AUTHORIZED_METHODS_SIMPLE\\\" /project/tests/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_020",
+    "content": "/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py:52:IS_AUTHORIZED_METHODS_SIMPLE = {\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_021",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"is_authorized_configuration\\\" /project/tests/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_021",
+    "content": "/project/tests/auth/managers/test_base_auth_manager.py:52:    def is_authorized_configuration(\n/project/tests/providers/amazon/aws/auth_manager/test_aws_auth_manager.py:140:    def test_is_authorized_configuration(\n/project/tests/providers/amazon/aws/auth_manager/test_aws_auth_manager.py:154:        result = auth_manager.is_authorized_configuration(method=method, details=details, user=user)\n/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py:53:    \"is_authorized_configuration\": RESOURCE_CONFIG,\n/project/tests/www/test_auth.py:45:        (\"has_access_configuration\", \"is_authorized_configuration\"),\n/project/tests/www/test_security_manager.py:66:                    \"is_authorized_configuration\": False,\n/project/tests/www/test_security_manager.py:78:                    \"is_authorized_configuration\": False,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_022",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -A 20 \\\"IS_AUTHORIZED_METHODS_SIMPLE\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_022",
+    "content": "IS_AUTHORIZED_METHODS_SIMPLE = {\n    \"is_authorized_configuration\": RESOURCE_CONFIG,\n    \"is_authorized_connection\": RESOURCE_CONNECTION,\n    \"is_authorized_dataset\": RESOURCE_DATASET,\n    \"is_authorized_variable\": RESOURCE_VARIABLE,\n}\n\n\n@pytest.fixture\ndef auth_manager():\n    return FabAuthManager(None)\n\n\n@pytest.fixture\ndef flask_app():\n    return Flask(__name__)\n\n\n@pytest.fixture\ndef auth_manager_with_appbuilder(flask_app):\n    appbuilder = init_appbuilder(flask_app)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_023",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"def test_is_authorized\\\" /project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_023",
+    "content": "241:    def test_is_authorized_dag(\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_024",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep \\\"def test_\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_024",
+    "content": "    def test_get_user_display_name(\n    def test_get_user(self, mock_current_user, auth_manager):\n    def test_is_logged_in(self, mock_get_user, auth_manager):\n    def test_is_authorized_dag(\n    def test_security_manager_return_fab_security_manager_override(self, auth_manager_with_appbuilder):\n    def test_security_manager_return_custom_provided(self, flask_app, auth_manager_with_appbuilder):\n    def test_security_manager_wrong_inheritance_raise_exception(\n    def test_get_url_login_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n    def test_get_url_login(self, mock_url_for, auth_manager_with_appbuilder):\n    def test_get_url_login_with_next(self, mock_url_for, auth_manager_with_appbuilder):\n    def test_get_url_logout_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n    def test_get_url_logout(self, mock_url_for, auth_manager_with_appbuilder):\n    def test_get_url_user_profile_when_auth_view_not_defined(self, auth_manager_with_appbuilder):\n    def test_get_url_user_profile(self, mock_url_for, auth_manager_with_appbuilder):\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_025",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/providers/fab/auth_manager/fab_auth_manager.py | grep -n \\\"def is_authorized\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_026",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"command\": \"/project -name \\\"security_manager.py\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_026",
+    "content": "/project/airflow/www/security_manager.py\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_027",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/www/security_manager.py | grep -n -A 20 \\\"def has_access\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_027",
+    "content": "122:    def has_access(\n123-        self, action_name: str, resource_name: str, user=None, resource_pk: str | None = None\n124-    ) -> bool:\n125-        \"\"\"\n126-        Verify whether a given user could perform a certain action on the given resource.\n127-\n128-        Example actions might include can_read, can_write, can_delete, etc.\n129-\n130-        This function is called by FAB when accessing a view. See\n131-        https://github.com/dpgaspar/Flask-AppBuilder/blob/c6fecdc551629e15467fde5d06b4437379d90592/flask_appbuilder/security/decorators.py#L134\n132-\n133-        :param action_name: action_name on resource (e.g can_read, can_edit).\n134-        :param resource_name: name of view-menu or resource.\n135-        :param user: user\n136-        :param resource_pk: the resource primary key (e.g. the connection ID)\n137-        :return: Whether user could perform certain action on the resource.\n138-        \"\"\"\n139-        if not user:\n140-            user = g.user\n141-\n142-        is_authorized_method = self._get_auth_manager_is_authorized_method(resource_name)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_028",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/www/security_manager.py | grep -n -A 30 \\\"def _get_auth_manager_is_authorized_method\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_028",
+    "content": "329:    def _get_auth_manager_is_authorized_method(self, fab_resource_name: str) -> Callable:\n330-        is_authorized_method = self._auth_manager_is_authorized_map.get(fab_resource_name)\n331-        if is_authorized_method:\n332-            return is_authorized_method\n333-        elif fab_resource_name in [RESOURCE_DOCS_MENU, RESOURCE_ADMIN_MENU, RESOURCE_BROWSE_MENU]:\n334-            # Display the \"Browse\", \"Admin\" and \"Docs\" dropdowns in the menu if the user has access to at\n335-            # least one dropdown child\n336-            return self._is_authorized_category_menu(fab_resource_name)\n337-\n338-\n339-    def _is_authorized_category_menu(self, category: str) -> Callable:\n340-        items = {item.name for item in self.appbuilder.menu.find(category).childs}\n341-        return lambda action, resource_pk, user: any(\n342-            self._get_auth_manager_is_authorized_method(fab_resource_name=item)(action, resource_pk, user)\n343-            for item in items\n344-        )\n345-\n346-    \"\"\"\n347-    The following methods are specific to FAB auth manager. They still need to be \"present\" in the main\n348-    security manager class, but they do nothing.\n349-    \"\"\"\n350-\n351-    def get_action(self, name: str) -> Action:\n352-        raise NotImplementedError(\"Only available if FAB auth manager is used\")\n353-\n354-    def get_resource(self, name: str) -> Resource:\n355-        raise NotImplementedError(\"Only available if FAB auth manager is used\")\n356-\n357-    def add_permissions_view(self, base_action_names, resource_name):\n358-        pass\n359-\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_029",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/www/security_manager.py | grep -n -A 30 \\\"def has_access\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_029",
+    "content": "122:    def has_access(\n123-        self, action_name: str, resource_name: str, user=None, resource_pk: str | None = None\n124-    ) -> bool:\n125-        \"\"\"\n126-        Verify whether a given user could perform a certain action on the given resource.\n127-\n128-        Example actions might include can_read, can_write, can_delete, etc.\n129-\n130-        This function is called by FAB when accessing a view. See\n131-        https://github.com/dpgaspar/Flask-AppBuilder/blob/c6fecdc551629e15467fde5d06b4437379d90592/flask_appbuilder/security/decorators.py#L134\n132-\n133-        :param action_name: action_name on resource (e.g can_read, can_edit).\n134-        :param resource_name: name of view-menu or resource.\n135-        :param user: user\n136-        :param resource_pk: the resource primary key (e.g. the connection ID)\n137-        :return: Whether user could perform certain action on the resource.\n138-        \"\"\"\n139-        if not user:\n140-            user = g.user\n141-\n142-        is_authorized_method = self._get_auth_manager_is_authorized_method(resource_name)\n143-        return is_authorized_method(action_name, resource_pk, user)\n144-\n145-    def create_admin_standalone(self) -> tuple[str | None, str | None]:\n146-        \"\"\"Perform the required steps when initializing airflow for standalone mode.\n147-\n148-        If necessary, returns the username and password to be printed in the console for users to log in.\n149-        \"\"\"\n150-        return None, None\n151-\n152-    def add_limit_view(self, baseview):\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_030",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/www/security_manager.py | grep -n -A 20 \\\"def _get_auth_manager_is_authorized_method\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_030",
+    "content": "329:    def _get_auth_manager_is_authorized_method(self, fab_resource_name: str) -> Callable:\n330-        is_authorized_method = self._auth_manager_is_authorized_map.get(fab_resource_name)\n331-        if is_authorized_method:\n332-            return is_authorized_method\n333-        elif fab_resource_name in [RESOURCE_DOCS_MENU, RESOURCE_ADMIN_MENU, RESOURCE_BROWSE_MENU]:\n334-            # Display the \"Browse\", \"Admin\" and \"Docs\" dropdowns in the menu if the user has access to at\n335-            # least one dropdown child\n336-            return self._is_authorized_category_menu(fab_resource_name)\n337-\n338-\n339-    def _is_authorized_category_menu(self, category: str) -> Callable:\n340-        items = {item.name for item in self.appbuilder.menu.find(category).childs}\n341-        return lambda action, resource_pk, user: any(\n342-            self._get_auth_manager_is_authorized_method(fab_resource_name=item)(action, resource_pk, user)\n343-            for item in items\n344-        )\n345-\n346-    \"\"\"\n347-    The following methods are specific to FAB auth manager. They still need to be \"present\" in the main\n348-    security manager class, but they do nothing.\n349-    \"\"\"\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_031",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/www/security_manager.py | grep -n -A 10 \\\"auth_manager\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_031",
+    "content": "68:from airflow.www.extensions.init_auth_manager import get_auth_manager\n69-from airflow.www.utils import CustomSQLAInterface\n70-\n71-EXISTING_ROLES = {\n72-    \"Admin\",\n73-    \"Viewer\",\n74-    \"User\",\n75-    \"Op\",\n76-    \"Public\",\n77-}\n78-\n--\n83:    from airflow.providers.fab.auth_manager.models import Action, Resource\n84-\n85-\n86-class AirflowSecurityManagerV2(LoggingMixin):\n87-    \"\"\"Custom security manager, which introduces a permission model adapted to Airflow.\n88-\n89-    It's named V2 to differentiate it from the obsolete airflow.www.security.AirflowSecurityManager.\n90-    \"\"\"\n91-\n92-    def __init__(self, appbuilder) -> None:\n93-        super().__init__()\n--\n111:        g.user = get_auth_manager().get_user()\n112-\n113-    def create_limiter(self) -> Limiter:\n114-        limiter = Limiter(key_func=get_remote_address)\n115-        limiter.init_app(self.appbuilder.get_app)\n116-        return limiter\n117-\n118-    def register_views(self):\n119-        \"\"\"Allow auth managers to register their own views. By default, do nothing.\"\"\"\n120-        pass\n121-\n--\n142:        is_authorized_method = self._get_auth_manager_is_authorized_method(resource_name)\n143-        return is_authorized_method(action_name, resource_pk, user)\n144-\n145-    def create_admin_standalone(self) -> tuple[str | None, str | None]:\n146-        \"\"\"Perform the required steps when initializing airflow for standalone mode.\n147-\n148-        If necessary, returns the username and password to be printed in the console for users to log in.\n149-        \"\"\"\n150-        return None, None\n151-\n152-    def add_limit_view(self, baseview):\n--\n172:    def _auth_manager_is_authorized_map(\n173-        self, session: Session = NEW_SESSION\n174-    ) -> dict[str, Callable[[str, str | None, BaseUser | None], bool]]:\n175-        \"\"\"\n176-        Return the map associating a FAB resource name to the corresponding auth manager is_authorized_ API.\n177-\n178-        The function returned takes the FAB action name and the user as parameter.\n179-        \"\"\"\n180:        auth_manager = get_auth_manager()\n181-        methods = get_method_from_fab_action_map()\n182-\n183-        def get_connection_id(resource_pk):\n184-            if not resource_pk:\n185-                return None\n186-            connection = session.scalar(select(Connection).where(Connection.id == resource_pk).limit(1))\n187-            if not connection:\n188-                raise AirflowException(\"Connection not found\")\n189-            return connection.conn_id\n190-\n--\n234:            RESOURCE_AUDIT_LOG: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n235-                method=methods[action],\n236-                access_entity=DagAccessEntity.AUDIT_LOG,\n237-                user=user,\n238-            ),\n239:            RESOURCE_CLUSTER_ACTIVITY: lambda action, resource_pk, user: auth_manager.is_authorized_view(\n240-                access_view=AccessView.CLUSTER_ACTIVITY,\n241-                user=user,\n242-            ),\n243:            RESOURCE_CONFIG: lambda action, resource_pk, user: auth_manager.is_authorized_configuration(\n244-                method=methods[action],\n245-                user=user,\n246-            ),\n247:            RESOURCE_CONNECTION: lambda action, resource_pk, user: auth_manager.is_authorized_connection(\n248-                method=methods[action],\n249-                details=ConnectionDetails(conn_id=get_connection_id(resource_pk)),\n250-                user=user,\n251-            ),\n252:            RESOURCE_DAG: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n253-                method=methods[action],\n254-                user=user,\n255-            ),\n256:            RESOURCE_DAG_CODE: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n257-                method=methods[action],\n258-                access_entity=DagAccessEntity.CODE,\n259-                user=user,\n260-            ),\n261:            RESOURCE_DAG_DEPENDENCIES: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n262-                method=methods[action],\n263-                access_entity=DagAccessEntity.DEPENDENCIES,\n264-                user=user,\n265-            ),\n266:            RESOURCE_DAG_RUN: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n267-                method=methods[action],\n268-                access_entity=DagAccessEntity.RUN,\n269-                details=DagDetails(id=get_dag_id_from_dagrun_id(resource_pk)),\n270-                user=user,\n271-            ),\n272:            RESOURCE_DATASET: lambda action, resource_pk, user: auth_manager.is_authorized_dataset(\n273-                method=methods[action],\n274-                user=user,\n275-            ),\n276:            RESOURCE_DOCS: lambda action, resource_pk, user: auth_manager.is_authorized_view(\n277-                access_view=AccessView.DOCS,\n278-                user=user,\n279-            ),\n280:            RESOURCE_PLUGIN: lambda action, resource_pk, user: auth_manager.is_authorized_view(\n281-                access_view=AccessView.PLUGINS,\n282-                user=user,\n283-            ),\n284:            RESOURCE_JOB: lambda action, resource_pk, user: auth_manager.is_authorized_view(\n285-                access_view=AccessView.JOBS,\n286-                user=user,\n287-            ),\n288:            RESOURCE_POOL: lambda action, resource_pk, user: auth_manager.is_authorized_pool(\n289-                method=methods[action],\n290-                details=PoolDetails(name=get_pool_name(resource_pk)),\n291-                user=user,\n292-            ),\n293:            RESOURCE_PROVIDER: lambda action, resource_pk, user: auth_manager.is_authorized_view(\n294-                access_view=AccessView.PROVIDERS,\n295-                user=user,\n296-            ),\n297:            RESOURCE_SLA_MISS: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n298-                method=methods[action],\n299-                access_entity=DagAccessEntity.SLA_MISS,\n300-                user=user,\n301-            ),\n302:            RESOURCE_TASK_INSTANCE: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n303-                method=methods[action],\n304-                access_entity=DagAccessEntity.TASK_INSTANCE,\n305-                details=DagDetails(id=get_dag_id_from_task_instance(resource_pk)),\n306-                user=user,\n307-            ),\n308:            RESOURCE_TASK_RESCHEDULE: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n309-                method=methods[action],\n310-                access_entity=DagAccessEntity.TASK_RESCHEDULE,\n311-                user=user,\n312-            ),\n313:            RESOURCE_TRIGGER: lambda action, resource_pk, user: auth_manager.is_authorized_view(\n314-                access_view=AccessView.TRIGGERS,\n315-                user=user,\n316-            ),\n317:            RESOURCE_VARIABLE: lambda action, resource_pk, user: auth_manager.is_authorized_variable(\n318-                method=methods[action],\n319-                details=VariableDetails(key=get_variable_key(resource_pk)),\n320-                user=user,\n321-            ),\n322:            RESOURCE_XCOM: lambda action, resource_pk, user: auth_manager.is_authorized_dag(\n323-                method=methods[action],\n324-                access_entity=DagAccessEntity.XCOM,\n325-                user=user,\n326-            ),\n327-        }\n328-\n329:    def _get_auth_manager_is_authorized_method(self, fab_resource_name: str) -> Callable:\n330:        is_authorized_method = self._auth_manager_is_authorized_map.get(fab_resource_name)\n331-        if is_authorized_method:\n332-            return is_authorized_method\n333-        elif fab_resource_name in [RESOURCE_DOCS_MENU, RESOURCE_ADMIN_MENU, RESOURCE_BROWSE_MENU]:\n334-            # Display the \"Browse\", \"Admin\" and \"Docs\" dropdowns in the menu if the user has access to at\n335-            # least one dropdown child\n336-            return self._is_authorized_category_menu(fab_resource_name)\n337-\n338-\n339-    def _is_authorized_category_menu(self, category: str) -> Callable:\n340-        items = {item.name for item in self.appbuilder.menu.find(category).childs}\n--\n342:            self._get_auth_manager_is_authorized_method(fab_resource_name=item)(action, resource_pk, user)\n343-            for item in items\n344-        )\n345-\n346-    \"\"\"\n347-    The following methods are specific to FAB auth manager. They still need to be \"present\" in the main\n348-    security manager class, but they do nothing.\n349-    \"\"\"\n350-\n351-    def get_action(self, name: str) -> Action:\n352-        raise NotImplementedError(\"Only available if FAB auth manager is used\")\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_032",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/www/security_manager.py   --old_str '    def _get_auth_manager_is_authorized_method(self, fab_resource_name: str) -> Callable:\\n        is_authorized_method = self._auth_manager_is_authorized_map.get(fab_resource_name)\\n        if is_authorized_method:\\n            return is_authorized_method\\n        elif fab_resource_name in [RESOURCE_DOCS_MENU, RESOURCE_ADMIN_MENU, RESOURCE_BROWSE_MENU]:\\n            # Display the \\\"Browse\\\", \\\"Admin\\\" and \\\"Docs\\\" dropdowns in the menu if the user has access to at\\n            # least one dropdown child\\n            return self._is_authorized_category_menu(fab_resource_name)' --new_str '    def _get_auth_manager_is_authorized_method(self, fab_resource_name: str) -> Callable:\\n        is_authorized_method = self._auth_manager_is_authorized_map.get(fab_resource_name)\\n        if is_authorized_method:\\n            return is_authorized_method\\n        elif fab_resource_name in [RESOURCE_DOCS_MENU, RESOURCE_ADMIN_MENU, RESOURCE_BROWSE_MENU]:\\n            # Display the \\\"Browse\\\", \\\"Admin\\\" and \\\"Docs\\\" dropdowns in the menu if the user has access to at\\n            # least one dropdown child\\n            return self._is_authorized_category_menu(fab_resource_name)\\n        else:\\n            return lambda action, resource_pk, user: get_auth_manager().is_authorized_custom_view(\\n                fab_action_name=action, fab_resource_name=fab_resource_name, user=user\\n            )'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_032",
+    "content": "The file /project/airflow/www/security_manager.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/www/security_manager.py:\n   324\t                access_entity=DagAccessEntity.XCOM,\n   325\t                user=user,\n   326\t            ),\n   327\t        }\n   328\t\n   329\t    def _get_auth_manager_is_authorized_method(self, fab_resource_name: str) -> Callable:\n   330\t        is_authorized_method = self._auth_manager_is_authorized_map.get(fab_resource_name)\n   331\t        if is_authorized_method:\n   332\t            return is_authorized_method\n   333\t        elif fab_resource_name in [RESOURCE_DOCS_MENU, RESOURCE_ADMIN_MENU, RESOURCE_BROWSE_MENU]:\n   334\t            # Display the \"Browse\", \"Admin\" and \"Docs\" dropdowns in the menu if the user has access to at\n   335\t            # least one dropdown child\n   336\t            return self._is_authorized_category_menu(fab_resource_name)\n   337\t        else:\n   338\t            return lambda action, resource_pk, user: get_auth_manager().is_authorized_custom_view(\n   339\t                fab_action_name=action, fab_resource_name=fab_resource_name, user=user\n   340\t            )\n   341\t\n   342\t\n   343\t    def _is_authorized_category_menu(self, category: str) -> Callable:\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_033",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/airflow/providers/fab/auth_manager/fab_auth_manager.py | grep -A 20 \\\"def is_logged_in\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_033",
+    "content": "   181\t    def is_logged_in(self) -> bool:\n   182\t        \"\"\"Return whether the user is logged in.\"\"\"\n   183\t        return not self.get_user().is_anonymous\n   184\t\n   185\t\n   186\t\n   187\t\n   188\t\n   189\t\n   190\t\n   191\t\n   192\t\n   193\t\n   194\t\n   195\t    @provide_session\n   196\t    def get_permitted_dag_ids(\n   197\t        self,\n   198\t        *,\n   199\t        methods: Container[ResourceMethod] | None = None,\n   200\t        user=None,\n   201\t        session: Session = NEW_SESSION,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_034",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/providers/fab/auth_manager/fab_auth_manager.py   --old_str '    def is_logged_in(self) -> bool:\\n        \\\"\\\"\\\"Return whether the user is logged in.\\\"\\\"\\\"\\n        return not self.get_user().is_anonymous' --new_str '    def is_logged_in(self) -> bool:\\n        \\\"\\\"\\\"Return whether the user is logged in.\\\"\\\"\\\"\\n        return not self.get_user().is_anonymous\\n\\n    def is_authorized_configuration(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        details: ConfigurationDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        return self._is_authorized(method=method, resource_type=RESOURCE_CONFIG, user=user)\\n\\n    def is_authorized_connection(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        details: ConnectionDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        return self._is_authorized(method=method, resource_type=RESOURCE_CONNECTION, user=user)\\n\\n    def is_authorized_dag(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        access_entity: DagAccessEntity | None = None,\\n        details: DagDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        if not access_entity:\\n            return self._is_authorized_dag(method=method, details=details, user=user)\\n\\n        return self._is_authorized_dag(\\n            method=method, details=details, user=user\\n        ) and self._is_authorized(\\n            method=method,\\n            resource_type=self._get_fab_resource_types(access_entity),\\n            user=user,\\n        )\\n\\n    def is_authorized_dataset(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        details: DatasetDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        return self._is_authorized(method=method, resource_type=RESOURCE_DATASET, user=user)\\n\\n    def is_authorized_pool(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        details: PoolDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        return self._is_authorized(method=method, resource_type=RESOURCE_POOL, user=user)\\n\\n    def is_authorized_variable(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        details: VariableDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        return self._is_authorized(method=method, resource_type=RESOURCE_VARIABLE, user=user)\\n\\n    def is_authorized_view(\\n        self,\\n        *,\\n        access_view: AccessView,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        return self._is_authorized(\\n            method=\\\"GET\\\",\\n            resource_type=_MAP_ACCESS_VIEW_TO_FAB_RESOURCE_TYPE[access_view],\\n            user=user,\\n        )\\n\\n    def is_authorized_custom_view(\\n        self, *, fab_action_name: str, fab_resource_name: str, user: BaseUser | None = None\\n    ) -> bool:\\n        if not user:\\n            user = self.get_user()\\n        user_permissions = self._get_user_permissions(user)\\n        return (fab_action_name, fab_resource_name) in user_permissions'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_034",
+    "content": "The file /project/airflow/providers/fab/auth_manager/fab_auth_manager.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/providers/fab/auth_manager/fab_auth_manager.py:\n   176\t\n   177\t    def init(self) -> None:\n   178\t        \"\"\"Run operations when Airflow is initializing.\"\"\"\n   179\t        self._sync_appbuilder_roles()\n   180\t\n   181\t    def is_logged_in(self) -> bool:\n   182\t        \"\"\"Return whether the user is logged in.\"\"\"\n   183\t        return not self.get_user().is_anonymous\n   184\t\n   185\t    def is_authorized_configuration(\n   186\t        self,\n   187\t        *,\n   188\t        method: ResourceMethod,\n   189\t        details: ConfigurationDetails | None = None,\n   190\t        user: BaseUser | None = None,\n   191\t    ) -> bool:\n   192\t        return self._is_authorized(method=method, resource_type=RESOURCE_CONFIG, user=user)\n   193\t\n   194\t    def is_authorized_connection(\n   195\t        self,\n   196\t        *,\n   197\t        method: ResourceMethod,\n   198\t        details: ConnectionDetails | None = None,\n   199\t        user: BaseUser | None = None,\n   200\t    ) -> bool:\n   201\t        return self._is_authorized(method=method, resource_type=RESOURCE_CONNECTION, user=user)\n   202\t\n   203\t    def is_authorized_dag(\n   204\t        self,\n   205\t        *,\n   206\t        method: ResourceMethod,\n   207\t        access_entity: DagAccessEntity | None = None,\n   208\t        details: DagDetails | None = None,\n   209\t        user: BaseUser | None = None,\n   210\t    ) -> bool:\n   211\t        if not access_entity:\n   212\t            return self._is_authorized_dag(method=method, details=details, user=user)\n   213\t\n   214\t        return self._is_authorized_dag(\n   215\t            method=method, details=details, user=user\n   216\t        ) and self._is_authorized(\n   217\t            method=method,\n   218\t            resource_type=self._get_fab_resource_types(access_entity),\n   219\t            user=user,\n   220\t        )\n   221\t\n   222\t    def is_authorized_dataset(\n   223\t        self,\n   224\t        *,\n   225\t        method: ResourceMethod,\n   226\t        details: DatasetDetails | None = None,\n   227\t        user: BaseUser | None = None,\n   228\t    ) -> bool:\n   229\t        return self._is_authorized(method=method, resource_type=RESOURCE_DATASET, user=user)\n   230\t\n   231\t    def is_authorized_pool(\n   232\t        self,\n   233\t        *,\n   234\t        method: ResourceMethod,\n   235\t        details: PoolDetails | None = None,\n   236\t        user: BaseUser | None = None,\n   237\t    ) -> bool:\n   238\t        return self._is_authorized(method=method, resource_type=RESOURCE_POOL, user=user)\n   239\t\n   240\t    def is_authorized_variable(\n   241\t        self,\n   242\t        *,\n   243\t        method: ResourceMethod,\n   244\t        details: VariableDetails | None = None,\n   245\t        user: BaseUser | None = None,\n   246\t    ) -> bool:\n   247\t        return self._is_authorized(method=method, resource_type=RESOURCE_VARIABLE, user=user)\n   248\t\n   249\t    def is_authorized_view(\n   250\t        self,\n   251\t        *,\n   252\t        access_view: AccessView,\n   253\t        user: BaseUser | None = None,\n   254\t    ) -> bool:\n   255\t        return self._is_authorized(\n   256\t            method=\"GET\",\n   257\t            resource_type=_MAP_ACCESS_VIEW_TO_FAB_RESOURCE_TYPE[access_view],\n   258\t            user=user,\n   259\t        )\n   260\t\n   261\t    def is_authorized_custom_view(\n   262\t        self, *, fab_action_name: str, fab_resource_name: str, user: BaseUser | None = None\n   263\t    ) -> bool:\n   264\t        if not user:\n   265\t            user = self.get_user()\n   266\t        user_permissions = self._get_user_permissions(user)\n   267\t        return (fab_action_name, fab_resource_name) in user_permissions\n   268\t\n   269\t\n   270\t\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_035",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/airflow/providers/fab/auth_manager/fab_auth_manager.py | grep -A 20 \\\"def _get_fab_resource_types\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_035",
+    "content": "   390\t    def _get_fab_resource_types(dag_access_entity: DagAccessEntity) -> tuple[str, ...]:\n   391\t        \"\"\"\n   392\t        Convert a DAG access entity to a tuple of FAB resource type.\n   393\t\n   394\t        :param dag_access_entity: the DAG access entity\n   395\t\n   396\t        :meta private:\n   397\t        \"\"\"\n   398\t        if dag_access_entity not in _MAP_DAG_ACCESS_ENTITY_TO_FAB_RESOURCE_TYPE:\n   399\t            raise AirflowException(f\"Unknown DAG access entity: {dag_access_entity}\")\n   400\t        return _MAP_DAG_ACCESS_ENTITY_TO_FAB_RESOURCE_TYPE[dag_access_entity]\n   401\t\n   402\t    def _resource_name_for_dag(self, dag_id: str) -> str:\n   403\t        \"\"\"\n   404\t        Return the FAB resource name for a DAG id.\n   405\t\n   406\t        :param dag_id: the DAG id\n   407\t\n   408\t        :meta private:\n   409\t        \"\"\"\n   410\t        root_dag_id = self._get_root_dag_id(dag_id)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_036",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/airflow/providers/fab/auth_manager/fab_auth_manager.py | grep -B 5 -A 5 \\\"def _get_fab_action\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_036",
+    "content": "   371\t\n   372\t\n   373\t\n   374\t\n   375\t    @staticmethod\n   376\t    def _get_fab_action(method: ResourceMethod) -> str:\n   377\t        \"\"\"\n   378\t        Convert the method to a FAB action.\n   379\t\n   380\t        :param method: the method to convert\n   381\t\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_037",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/providers/fab/auth_manager/fab_auth_manager.py   --old_str '    @staticmethod\\n    def _get_fab_action(method: ResourceMethod) -> str:' --new_str '    def _is_authorized(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        resource_type: str | tuple[str, ...],\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        \\\"\\\"\\\"\\n        Return whether the user is authorized to perform a given action on a resource.\\n\\n        :param method: the method to perform\\n        :param resource_type: the resource type(s) to perform the action on\\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\\n\\n        :meta private:\\n        \\\"\\\"\\\"\\n        if not user:\\n            user = self.get_user()\\n\\n        user_permissions = self._get_user_permissions(user)\\n        fab_action = self._get_fab_action(method)\\n\\n        if isinstance(resource_type, str):\\n            resource_type = (resource_type,)\\n\\n        return any((fab_action, resource) in user_permissions for resource in resource_type)\\n\\n    def _is_authorized_dag(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        details: DagDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        \\\"\\\"\\\"\\n        Return whether the user is authorized to perform a given action on a DAG.\\n\\n        :param method: the method to perform\\n        :param details: optional details about the DAG\\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\\n\\n        :meta private:\\n        \\\"\\\"\\\"\\n        if not user:\\n            user = self.get_user()\\n\\n        user_permissions = self._get_user_permissions(user)\\n        fab_action = self._get_fab_action(method)\\n\\n        if (fab_action, RESOURCE_DAG) in user_permissions:\\n            return True\\n\\n        if details and details.id:\\n            resource_name = self._resource_name_for_dag(details.id)\\n            return (fab_action, resource_name) in user_permissions\\n\\n        return False\\n\\n    def _get_user_permissions(self, user: BaseUser) -> set[tuple[str, str]]:\\n        \\\"\\\"\\\"\\n        Return the user permissions.\\n\\n        :param user: the user to get permissions for\\n\\n        :meta private:\\n        \\\"\\\"\\\"\\n        if not user:\\n            return set()\\n        if hasattr(user, \\\"perms\\\"):\\n            return set(user.perms)\\n        return set()\\n\\n    @staticmethod\\n    def _get_fab_action(method: ResourceMethod) -> str:'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_037",
+    "content": "The file /project/airflow/providers/fab/auth_manager/fab_auth_manager.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/providers/fab/auth_manager/fab_auth_manager.py:\n   370\t\n   371\t\n   372\t\n   373\t\n   374\t\n   375\t    def _is_authorized(\n   376\t        self,\n   377\t        *,\n   378\t        method: ResourceMethod,\n   379\t        resource_type: str | tuple[str, ...],\n   380\t        user: BaseUser | None = None,\n   381\t    ) -> bool:\n   382\t        \"\"\"\n   383\t        Return whether the user is authorized to perform a given action on a resource.\n   384\t\n   385\t        :param method: the method to perform\n   386\t        :param resource_type: the resource type(s) to perform the action on\n   387\t        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n   388\t\n   389\t        :meta private:\n   390\t        \"\"\"\n   391\t        if not user:\n   392\t            user = self.get_user()\n   393\t\n   394\t        user_permissions = self._get_user_permissions(user)\n   395\t        fab_action = self._get_fab_action(method)\n   396\t\n   397\t        if isinstance(resource_type, str):\n   398\t            resource_type = (resource_type,)\n   399\t\n   400\t        return any((fab_action, resource) in user_permissions for resource in resource_type)\n   401\t\n   402\t    def _is_authorized_dag(\n   403\t        self,\n   404\t        *,\n   405\t        method: ResourceMethod,\n   406\t        details: DagDetails | None = None,\n   407\t        user: BaseUser | None = None,\n   408\t    ) -> bool:\n   409\t        \"\"\"\n   410\t        Return whether the user is authorized to perform a given action on a DAG.\n   411\t\n   412\t        :param method: the method to perform\n   413\t        :param details: optional details about the DAG\n   414\t        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n   415\t\n   416\t        :meta private:\n   417\t        \"\"\"\n   418\t        if not user:\n   419\t            user = self.get_user()\n   420\t\n   421\t        user_permissions = self._get_user_permissions(user)\n   422\t        fab_action = self._get_fab_action(method)\n   423\t\n   424\t        if (fab_action, RESOURCE_DAG) in user_permissions:\n   425\t            return True\n   426\t\n   427\t        if details and details.id:\n   428\t            resource_name = self._resource_name_for_dag(details.id)\n   429\t            return (fab_action, resource_name) in user_permissions\n   430\t\n   431\t        return False\n   432\t\n   433\t    def _get_user_permissions(self, user: BaseUser) -> set[tuple[str, str]]:\n   434\t        \"\"\"\n   435\t        Return the user permissions.\n   436\t\n   437\t        :param user: the user to get permissions for\n   438\t\n   439\t        :meta private:\n   440\t        \"\"\"\n   441\t        if not user:\n   442\t            return set()\n   443\t        if hasattr(user, \"perms\"):\n   444\t            return set(user.perms)\n   445\t        return set()\n   446\t\n   447\t    @staticmethod\n   448\t    def _get_fab_action(method: ResourceMethod) -> str:\n   449\t        \"\"\"\n   450\t        Convert the method to a FAB action.\n   451\t\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_038",
+        "type": "function",
+        "function": {
+          "name": "pytest",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_038",
+    "content": "/usr/local/lib/python3.8/site-packages/pytest_asyncio/plugin.py:208: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\nThe event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\n\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n============================= test session starts ==============================\nplatform linux -- Python 3.8.20, pytest-8.3.5, pluggy-1.5.0 -- /usr/local/bin/python3.8\ncachedir: .pytest_cache\nrootdir: /project\nconfigfile: pyproject.toml\nplugins: anyio-4.5.2, asyncio-0.24.0, mock-3.14.1, time-machine-2.15.0\nasyncio: mode=strict, default_loop_scope=None\ncollecting ... \rcollected 30 items                                                             \n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-First-Last-None-None-First Last] PASSED [  3%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-First-None-user-None-First] PASSED [  6%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-None-Last-user-email-Last] PASSED [ 10%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-None-None-None-email-] PASSED [ 13%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user PASSED [ 16%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_logged_in PASSED [ 20%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-None-user_permissions0-True] PASSED [ 23%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-dag_details1-user_permissions1-True] PASSED [ 26%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-dag_details2-user_permissions2-True] PASSED [ 30%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-None-dag_details3-user_permissions3-False] PASSED [ 33%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-dag_details4-user_permissions4-False] PASSED [ 36%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-None-user_permissions5-False] PASSED [ 40%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.RUN-dag_details6-user_permissions6-True] PASSED [ 43%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details7-user_permissions7-False] PASSED [ 46%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details8-user_permissions8-False] FAILED [ 50%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details9-user_permissions9-True] PASSED [ 53%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[DELETE-DagAccessEntity.TASK-dag_details10-user_permissions10-True] FAILED [ 56%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-DagAccessEntity.RUN-dag_details11-user_permissions11-True] FAILED [ 60%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-DagAccessEntity.RUN-dag_details12-user_permissions12-False] PASSED [ 63%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_LOGS-dag_details13-user_permissions13-False] PASSED [ 66%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_security_manager_return_fab_security_manager_override PASSED [ 70%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_security_manager_return_custom_provided PASSED [ 73%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_security_manager_wrong_inheritance_raise_exception PASSED [ 76%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_login_when_auth_view_not_defined PASSED [ 80%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_login PASSED [ 83%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_login_with_next PASSED [ 86%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_logout_when_auth_view_not_defined PASSED [ 90%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_logout PASSED [ 93%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_user_profile_when_auth_view_not_defined PASSED [ 96%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_user_profile PASSED [100%]\n\n=================================== FAILURES ===================================\n_ TestFabAuthManager.test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details8-user_permissions8-False] _\n\nself = <tests.providers.fab.auth_manager.test_fab_auth_manager.TestFabAuthManager object at 0x71dd24a3dca0>\nmethod = 'GET'\ndag_access_entity = <DagAccessEntity.TASK_INSTANCE: 'TASK_INSTANCE'>\ndag_details = DagDetails(id='test_dag_id')\nuser_permissions = [('can_read', 'DAG:test_dag_id'), ('can_read', 'Task Instances')]\nexpected_result = False\nauth_manager = <airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager object at 0x71dd23d91d30>\n\n    @pytest.mark.parametrize(\n        \"method, dag_access_entity, dag_details, user_permissions, expected_result\",\n        [\n            # Scenario 1 #\n            # With global permissions on Dags\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # On specific DAG with global permissions on Dags\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # With permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id2\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on DAGs\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, \"resource_test\")],\n                False,\n            ),\n            # Scenario 2 #\n            # With global permissions on DAGs\n            (\n                \"GET\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG), (ACTION_CAN_READ, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [\n                    (ACTION_CAN_READ, \"DAG:test_dag_id\"),\n                    (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE),\n                    (ACTION_CAN_READ, RESOURCE_DAG_RUN),\n                ],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"DELETE\",\n                DagAccessEntity.TASK,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_DELETE, RESOURCE_TASK_INSTANCE)],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without permissions to edit the DAG\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                False,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_LOGS,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n        ],\n    )\n    def test_is_authorized_dag(\n        self, method, dag_access_entity, dag_details, user_permissions, expected_result, auth_manager\n    ):\n        user = Mock()\n        user.perms = user_permissions\n        result = auth_manager.is_authorized_dag(\n            method=method, access_entity=dag_access_entity, details=dag_details, user=user\n        )\n>       assert result == expected_result\nE       assert True == False\n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py:249: AssertionError\n_ TestFabAuthManager.test_is_authorized_dag[DELETE-DagAccessEntity.TASK-dag_details10-user_permissions10-True] _\n\nself = <tests.providers.fab.auth_manager.test_fab_auth_manager.TestFabAuthManager object at 0x71dd24a3de20>\nmethod = 'DELETE', dag_access_entity = <DagAccessEntity.TASK: 'TASK'>\ndag_details = DagDetails(id='test_dag_id')\nuser_permissions = [('can_edit', 'DAG:test_dag_id'), ('can_delete', 'Task Instances')]\nexpected_result = True\nauth_manager = <airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager object at 0x71dd23cbea30>\n\n    @pytest.mark.parametrize(\n        \"method, dag_access_entity, dag_details, user_permissions, expected_result\",\n        [\n            # Scenario 1 #\n            # With global permissions on Dags\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # On specific DAG with global permissions on Dags\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # With permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id2\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on DAGs\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, \"resource_test\")],\n                False,\n            ),\n            # Scenario 2 #\n            # With global permissions on DAGs\n            (\n                \"GET\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG), (ACTION_CAN_READ, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [\n                    (ACTION_CAN_READ, \"DAG:test_dag_id\"),\n                    (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE),\n                    (ACTION_CAN_READ, RESOURCE_DAG_RUN),\n                ],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"DELETE\",\n                DagAccessEntity.TASK,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_DELETE, RESOURCE_TASK_INSTANCE)],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without permissions to edit the DAG\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                False,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_LOGS,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n        ],\n    )\n    def test_is_authorized_dag(\n        self, method, dag_access_entity, dag_details, user_permissions, expected_result, auth_manager\n    ):\n        user = Mock()\n        user.perms = user_permissions\n        result = auth_manager.is_authorized_dag(\n            method=method, access_entity=dag_access_entity, details=dag_details, user=user\n        )\n>       assert result == expected_result\nE       assert False == True\n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py:249: AssertionError\n_ TestFabAuthManager.test_is_authorized_dag[POST-DagAccessEntity.RUN-dag_details11-user_permissions11-True] _\n\nself = <tests.providers.fab.auth_manager.test_fab_auth_manager.TestFabAuthManager object at 0x71dd24a3dee0>\nmethod = 'POST', dag_access_entity = <DagAccessEntity.RUN: 'RUN'>\ndag_details = DagDetails(id='test_dag_id')\nuser_permissions = [('can_edit', 'DAG:test_dag_id'), ('can_create', 'DAG Runs')]\nexpected_result = True\nauth_manager = <airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager object at 0x71dd23cac880>\n\n    @pytest.mark.parametrize(\n        \"method, dag_access_entity, dag_details, user_permissions, expected_result\",\n        [\n            # Scenario 1 #\n            # With global permissions on Dags\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # On specific DAG with global permissions on Dags\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG)],\n                True,\n            ),\n            # With permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n                None,\n                DagDetails(id=\"test_dag_id2\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on DAGs\n            (\n                \"GET\",\n                None,\n                None,\n                [(ACTION_CAN_READ, \"resource_test\")],\n                False,\n            ),\n            # Scenario 2 #\n            # With global permissions on DAGs\n            (\n                \"GET\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_DAG), (ACTION_CAN_READ, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n            # With read permissions on a specific DAG but not on the DAG run\n            (\n                \"GET\",\n                DagAccessEntity.TASK_INSTANCE,\n                DagDetails(id=\"test_dag_id\"),\n                [\n                    (ACTION_CAN_READ, \"DAG:test_dag_id\"),\n                    (ACTION_CAN_READ, RESOURCE_TASK_INSTANCE),\n                    (ACTION_CAN_READ, RESOURCE_DAG_RUN),\n                ],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"DELETE\",\n                DagAccessEntity.TASK,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_DELETE, RESOURCE_TASK_INSTANCE)],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without permissions to edit the DAG\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                False,\n            ),\n            # Without read permissions on a specific DAG\n            (\n                \"GET\",\n                DagAccessEntity.TASK_LOGS,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, RESOURCE_TASK_INSTANCE)],\n                False,\n            ),\n        ],\n    )\n    def test_is_authorized_dag(\n        self, method, dag_access_entity, dag_details, user_permissions, expected_result, auth_manager\n    ):\n        user = Mock()\n        user.perms = user_permissions\n        result = auth_manager.is_authorized_dag(\n            method=method, access_entity=dag_access_entity, details=dag_details, user=user\n        )\n>       assert result == expected_result\nE       assert False == True\n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py:249: AssertionError\n=============================== warnings summary ===============================\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-First-Last-None-None-First Last]\n  /project/airflow/example_dags/example_subdag_operator.py:42: RemovedInAirflow3Warning: This class is deprecated. Please use `airflow.utils.task_group.TaskGroup`.\n    section_1 = SubDagOperator(\n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-First-Last-None-None-First Last]\n  /project/airflow/example_dags/example_subdag_operator.py:51: RemovedInAirflow3Warning: This class is deprecated. Please use `airflow.utils.task_group.TaskGroup`.\n    section_2 = SubDagOperator(\n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py: 11 warnings\n  /usr/local/lib/python3.8/site-packages/flask_limiter/extension.py:333: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n\n ======================== Warning summary =============================\n\n   The tests generated 9 warnings.\n   After removing duplicates, 1 of them remained.\n   They are stored in /project/warnings.txt file.\n\n ======================================================================\n\n=========================== short test summary info ============================\nFAILED tests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details8-user_permissions8-False] - assert True == False\nFAILED tests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[DELETE-DagAccessEntity.TASK-dag_details10-user_permissions10-True] - assert False == True\nFAILED tests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-DagAccessEntity.RUN-dag_details11-user_permissions11-True] - assert False == True\n================== 3 failed, 27 passed, 13 warnings in 5.53s ===================\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_039",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -A 10 \\\"With edit permissions on a specific DAG\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_039",
+    "content": "            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"DELETE\",\n                DagAccessEntity.TASK,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_DELETE, RESOURCE_TASK_INSTANCE)],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without permissions to edit the DAG\n            (\n                \"POST\",\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_040",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -A 10 \\\"Without permission on a specific DAG (wrong method)\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_040",
+    "content": "            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_041",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -B 5 -A 10 \\\"Without permission on a specific DAG (wrong method)\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_041",
+    "content": "                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_042",
+        "type": "function",
+        "function": {
+          "name": "git",
+          "arguments": "{\"command\": \"show HEAD:airflow/providers/fab/auth_manager/fab_auth_manager.py | grep -A 20 \\\"def _is_authorized_dag\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_043",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/security/permissions.py | grep -A 10 \\\"ACTION_CAN\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_043",
+    "content": "ACTION_CAN_CREATE = \"can_create\"\nACTION_CAN_READ = \"can_read\"\nACTION_CAN_EDIT = \"can_edit\"\nACTION_CAN_DELETE = \"can_delete\"\nACTION_CAN_ACCESS_MENU = \"menu_access\"\nDEPRECATED_ACTION_CAN_DAG_READ = \"can_dag_read\"\nDEPRECATED_ACTION_CAN_DAG_EDIT = \"can_dag_edit\"\n\nDAG_ACTIONS = {ACTION_CAN_READ, ACTION_CAN_EDIT, ACTION_CAN_DELETE}\n\n\ndef resource_name_for_dag(root_dag_id: str) -> str:\n    \"\"\"Return the resource name for a DAG id.\n\n    Note that since a sub-DAG should follow the permission of its\n    parent DAG, you should pass ``DagModel.root_dag_id`` to this function,\n    for a subdag. A normal dag should pass the ``DagModel.dag_id``.\n    \"\"\"\n    if root_dag_id == RESOURCE_DAG:\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_044",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -A 10 \\\"With edit permissions on a specific DAG and read on the DAG access entity\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_044",
+    "content": "            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"DELETE\",\n                DagAccessEntity.TASK,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_DELETE, RESOURCE_TASK_INSTANCE)],\n                True,\n            ),\n            # With edit permissions on a specific DAG and read on the DAG access entity\n            (\n                \"POST\",\n                DagAccessEntity.RUN,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_EDIT, \"DAG:test_dag_id\"), (ACTION_CAN_CREATE, RESOURCE_DAG_RUN)],\n                True,\n            ),\n            # Without permissions to edit the DAG\n            (\n                \"POST\",\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_045",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -B 5 -A 10 \\\"Without permission on a specific DAG (wrong method)\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_045",
+    "content": "                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_046",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py | grep -B 5 -A 10 \\\"Without permission on a specific DAG (wrong method)\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_046",
+    "content": "                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\"), (ACTION_CAN_READ, \"DAG:test_dag_id2\")],\n                True,\n            ),\n            # Without permission on a specific DAG (wrong method)\n            (\n                \"POST\",\n                None,\n                DagDetails(id=\"test_dag_id\"),\n                [(ACTION_CAN_READ, \"DAG:test_dag_id\")],\n                False,\n            ),\n            # Without permission on a specific DAG\n            (\n                \"GET\",\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_047",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/providers/fab/auth_manager/fab_auth_manager.py   --old_str '    def is_authorized_dag(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        access_entity: DagAccessEntity | None = None,\\n        details: DagDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        if not access_entity:\\n            return self._is_authorized_dag(method=method, details=details, user=user)\\n\\n        return self._is_authorized_dag(\\n            method=method, details=details, user=user\\n        ) and self._is_authorized(\\n            method=method,\\n            resource_type=self._get_fab_resource_types(access_entity),\\n            user=user,\\n        )' --new_str '    def is_authorized_dag(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        access_entity: DagAccessEntity | None = None,\\n        details: DagDetails | None = None,\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        if not access_entity:\\n            return self._is_authorized_dag(method=method, details=details, user=user)\\n\\n        dag_method: ResourceMethod = \\\"GET\\\" if method == \\\"GET\\\" else \\\"PUT\\\"\\n\\n        return self._is_authorized_dag(\\n            method=dag_method, details=details, user=user\\n        ) and self._is_authorized(\\n            method=method,\\n            resource_type=self._get_fab_resource_types(access_entity),\\n            user=user,\\n        )'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_047",
+    "content": "The file /project/airflow/providers/fab/auth_manager/fab_auth_manager.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/providers/fab/auth_manager/fab_auth_manager.py:\n   198\t        details: ConnectionDetails | None = None,\n   199\t        user: BaseUser | None = None,\n   200\t    ) -> bool:\n   201\t        return self._is_authorized(method=method, resource_type=RESOURCE_CONNECTION, user=user)\n   202\t\n   203\t    def is_authorized_dag(\n   204\t        self,\n   205\t        *,\n   206\t        method: ResourceMethod,\n   207\t        access_entity: DagAccessEntity | None = None,\n   208\t        details: DagDetails | None = None,\n   209\t        user: BaseUser | None = None,\n   210\t    ) -> bool:\n   211\t        if not access_entity:\n   212\t            return self._is_authorized_dag(method=method, details=details, user=user)\n   213\t\n   214\t        dag_method: ResourceMethod = \"GET\" if method == \"GET\" else \"PUT\"\n   215\t\n   216\t        return self._is_authorized_dag(\n   217\t            method=dag_method, details=details, user=user\n   218\t        ) and self._is_authorized(\n   219\t            method=method,\n   220\t            resource_type=self._get_fab_resource_types(access_entity),\n   221\t            user=user,\n   222\t        )\n   223\t\n   224\t    def is_authorized_dataset(\n   225\t        self,\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_048",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/airflow/providers/fab/auth_manager/fab_auth_manager.py   --old_str '    def _is_authorized(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        resource_type: str | tuple[str, ...],\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        \\\"\\\"\\\"\\n        Return whether the user is authorized to perform a given action on a resource.\\n\\n        :param method: the method to perform\\n        :param resource_type: the resource type(s) to perform the action on\\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\\n\\n        :meta private:\\n        \\\"\\\"\\\"\\n        if not user:\\n            user = self.get_user()\\n\\n        user_permissions = self._get_user_permissions(user)\\n        fab_action = self._get_fab_action(method)\\n\\n        if isinstance(resource_type, str):\\n            resource_type = (resource_type,)\\n\\n        return any((fab_action, resource) in user_permissions for resource in resource_type)' --new_str '    def _is_authorized(\\n        self,\\n        *,\\n        method: ResourceMethod,\\n        resource_type: str | tuple[str, ...],\\n        user: BaseUser | None = None,\\n    ) -> bool:\\n        \\\"\\\"\\\"\\n        Return whether the user is authorized to perform a given action on a resource.\\n\\n        :param method: the method to perform\\n        :param resource_type: the resource type(s) to perform the action on\\n        :param user: the user to perform the action on. If not provided (or None), it uses the current user\\n\\n        :meta private:\\n        \\\"\\\"\\\"\\n        if not user:\\n            user = self.get_user()\\n\\n        user_permissions = self._get_user_permissions(user)\\n        fab_action = self._get_fab_action(method)\\n\\n        if isinstance(resource_type, str):\\n            resource_type = (resource_type,)\\n\\n        return all((fab_action, resource) in user_permissions for resource in resource_type)'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_048",
+    "content": "The file /project/airflow/providers/fab/auth_manager/fab_auth_manager.py has been edited. Here's the result of running `cat -n` on a snippet of /project/airflow/providers/fab/auth_manager/fab_auth_manager.py:\n   372\t\n   373\t\n   374\t\n   375\t\n   376\t\n   377\t    def _is_authorized(\n   378\t        self,\n   379\t        *,\n   380\t        method: ResourceMethod,\n   381\t        resource_type: str | tuple[str, ...],\n   382\t        user: BaseUser | None = None,\n   383\t    ) -> bool:\n   384\t        \"\"\"\n   385\t        Return whether the user is authorized to perform a given action on a resource.\n   386\t\n   387\t        :param method: the method to perform\n   388\t        :param resource_type: the resource type(s) to perform the action on\n   389\t        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n   390\t\n   391\t        :meta private:\n   392\t        \"\"\"\n   393\t        if not user:\n   394\t            user = self.get_user()\n   395\t\n   396\t        user_permissions = self._get_user_permissions(user)\n   397\t        fab_action = self._get_fab_action(method)\n   398\t\n   399\t        if isinstance(resource_type, str):\n   400\t            resource_type = (resource_type,)\n   401\t\n   402\t        return all((fab_action, resource) in user_permissions for resource in resource_type)\n   403\t\n   404\t    def _is_authorized_dag(\n   405\t        self,\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_049",
+        "type": "function",
+        "function": {
+          "name": "pytest",
+          "arguments": "{\"command\": \"/project/tests/providers/fab/auth_manager/test_fab_auth_manager.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_049",
+    "content": "/usr/local/lib/python3.8/site-packages/pytest_asyncio/plugin.py:208: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.\nThe event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"\n\n  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))\n============================= test session starts ==============================\nplatform linux -- Python 3.8.20, pytest-8.3.5, pluggy-1.5.0 -- /usr/local/bin/python3.8\ncachedir: .pytest_cache\nrootdir: /project\nconfigfile: pyproject.toml\nplugins: anyio-4.5.2, asyncio-0.24.0, mock-3.14.1, time-machine-2.15.0\nasyncio: mode=strict, default_loop_scope=None\ncollecting ... \rcollected 30 items                                                             \n\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-First-Last-None-None-First Last] PASSED [  3%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-First-None-user-None-First] PASSED [  6%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-None-Last-user-email-Last] PASSED [ 10%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user_display_name[1-None-None-None-email-] PASSED [ 13%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_user PASSED [ 16%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_logged_in PASSED [ 20%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-None-user_permissions0-True] PASSED [ 23%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-dag_details1-user_permissions1-True] PASSED [ 26%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-dag_details2-user_permissions2-True] PASSED [ 30%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-None-dag_details3-user_permissions3-False] PASSED [ 33%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-dag_details4-user_permissions4-False] PASSED [ 36%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-None-None-user_permissions5-False] PASSED [ 40%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.RUN-dag_details6-user_permissions6-True] PASSED [ 43%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details7-user_permissions7-False] PASSED [ 46%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details8-user_permissions8-False] PASSED [ 50%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_INSTANCE-dag_details9-user_permissions9-True] PASSED [ 53%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[DELETE-DagAccessEntity.TASK-dag_details10-user_permissions10-True] PASSED [ 56%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-DagAccessEntity.RUN-dag_details11-user_permissions11-True] PASSED [ 60%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[POST-DagAccessEntity.RUN-dag_details12-user_permissions12-False] PASSED [ 63%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_is_authorized_dag[GET-DagAccessEntity.TASK_LOGS-dag_details13-user_permissions13-False] PASSED [ 66%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_security_manager_return_fab_security_manager_override PASSED [ 70%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_security_manager_return_custom_provided PASSED [ 73%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_security_manager_wrong_inheritance_raise_exception PASSED [ 76%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_login_when_auth_view_not_defined PASSED [ 80%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_login PASSED [ 83%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_login_with_next PASSED [ 86%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_logout_when_auth_view_not_defined PASSED [ 90%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_logout PASSED [ 93%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_user_profile_when_auth_view_not_defined PASSED [ 96%]\ntests/providers/fab/auth_manager/test_fab_auth_manager.py::TestFabAuthManager::test_get_url_user_profile PASSED [100%]\n\n=============================== warnings summary ===============================\ntests/providers/fab/auth_manager/test_fab_auth_manager.py: 10 warnings\n  /usr/local/lib/python3.8/site-packages/flask_limiter/extension.py:333: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.\n    warnings.warn(\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n\n ======================== Warning summary =============================\n\n   The tests generated 9 warnings.\n   After removing duplicates, 1 of them remained.\n   They are stored in /project/warnings.txt file.\n\n ======================================================================\n\n======================= 30 passed, 10 warnings in 2.05s ========================\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_050",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/providers/fab/auth_manager/models.py | grep -A 10 \\\"perms\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_050",
+    "content": "cat: /project/airflow/providers/fab/auth_manager/models.py: No such file or directory\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_051",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"command\": \"/project -name \\\"models.py\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_052",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/airflow/providers/fab/auth_manager/models/__init__.py | grep -A 10 \\\"perms\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_052",
+    "content": "    def perms(self):\n        if not self._perms:\n            # Using the ORM here is _slow_ (Creating lots of objects to then throw them away) since this is in\n            # the path for every request. Avoid it if we can!\n            if current_app:\n                sm = current_app.appbuilder.sm\n                self._perms: set[tuple[str, str]] = set(\n                    sm.get_session.execute(\n                        select(sm.action_model.name, sm.resource_model.name)\n                        .join(sm.permission_model.action)\n                        .join(sm.permission_model.resource)\n                        .join(sm.permission_model.role)\n                        .where(sm.role_model.user.contains(self))\n                    )\n                )\n            else:\n                self._perms = {\n                    (perm.action.name, perm.resource.name) for role in self.roles for perm in role.permissions\n                }\n        return self._perms\n\n    def get_id(self):\n        return self.id\n\n    def get_name(self) -> str:\n        return self.username or self.email or self.user_id\n\n    def get_full_name(self):\n        return f\"{self.first_name} {self.last_name}\"\n\n--\n    _perms = None\n\n\nclass RegisterUser(Model):\n    \"\"\"Represents a user registration.\"\"\"\n\n    __tablename__ = \"ab_register_user\"\n    id = Column(Integer, primary_key=True)\n    first_name = Column(String(256), nullable=False)\n    last_name = Column(String(256), nullable=False)\n    username = Column(\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_053",
+        "type": "function",
+        "function": {
+          "name": "submit",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_053",
+    "content": "Thank you for your work on this issue. Please carefully follow the steps below to help review your changes.\n\n1. If you made any changes to your code after running the reproduction script, please run the reproduction script again.\n  If the reproduction script is failing, please revisit your changes and make sure they are correct.\n  If you have already removed your reproduction script, please ignore this step.\n2. Remove your reproduction script (if you haven't done so already).\n3. If you have modified any TEST files, please revert them to the state they had before you started fixing the issue.\n  You can do this with `git checkout -- /path/to/test/file.py`. Use below <diff> to find the files you need to revert.\n4. Run the submit command again to confirm.\n\nHere is a list of all of your changes:\n\n<diff>\ndiff --git a/airflow/auth/managers/base_auth_manager.py b/airflow/auth/managers/base_auth_manager.py\nindex 7dc4c0b099..9cd7e73e30 100644\n--- a/airflow/auth/managers/base_auth_manager.py\n+++ b/airflow/auth/managers/base_auth_manager.py\n@@ -21,6 +21,8 @@ from abc import abstractmethod\n from functools import cached_property\n from typing import TYPE_CHECKING, Container, Literal, Sequence\n \n+ResourceMethod = Literal[\"GET\", \"POST\", \"PUT\", \"DELETE\"]\n+\n from sqlalchemy import select\n \n from airflow.auth.managers.models.resource_details import (\ndiff --git a/airflow/auth/managers/utils/fab.py b/airflow/auth/managers/utils/fab.py\nindex 9e0958284c..88a1c4896d 100644\n--- a/airflow/auth/managers/utils/fab.py\n+++ b/airflow/auth/managers/utils/fab.py\n@@ -30,4 +30,17 @@ from airflow.security.permissions import (\n if TYPE_CHECKING:\n     from airflow.auth.managers.base_auth_manager import ResourceMethod\n \n+METHOD_TO_FAB_ACTION_MAP: dict[ResourceMethod, str] = {\n+    \"POST\": ACTION_CAN_CREATE,\n+    \"GET\": ACTION_CAN_READ,\n+    \"PUT\": ACTION_CAN_EDIT,\n+    \"DELETE\": ACTION_CAN_DELETE,\n+}\n+\n+def get_fab_action_from_method_map() -> dict[ResourceMethod, str]:\n+    return METHOD_TO_FAB_ACTION_MAP\n+\n+def get_method_from_fab_action_map() -> dict[str, ResourceMethod]:\n+    return {v: k for k, v in METHOD_TO_FAB_ACTION_MAP.items()}\n+\n \ndiff --git a/airflow/providers/fab/auth_manager/fab_auth_manager.py b/airflow/providers/fab/auth_manager/fab_auth_manager.py\nindex a4e40d070e..9ac9d58121 100644\n--- a/airflow/providers/fab/auth_manager/fab_auth_manager.py\n+++ b/airflow/providers/fab/auth_manager/fab_auth_manager.py\n@@ -182,6 +182,92 @@ class FabAuthManager(BaseAuthManager):\n         \"\"\"Return whether the user is logged in.\"\"\"\n         return not self.get_user().is_anonymous\n \n+    def is_authorized_configuration(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: ConfigurationDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_CONFIG, user=user)\n+\n+    def is_authorized_connection(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: ConnectionDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_CONNECTION, user=user)\n+\n+    def is_authorized_dag(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        access_entity: DagAccessEntity | None = None,\n+        details: DagDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        if not access_entity:\n+            return self._is_authorized_dag(method=method, details=details, user=user)\n+\n+        dag_method: ResourceMethod = \"GET\" if method == \"GET\" else \"PUT\"\n+\n+        return self._is_authorized_dag(\n+            method=dag_method, details=details, user=user\n+        ) and self._is_authorized(\n+            method=method,\n+            resource_type=self._get_fab_resource_types(access_entity),\n+            user=user,\n+        )\n+\n+    def is_authorized_dataset(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: DatasetDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_DATASET, user=user)\n+\n+    def is_authorized_pool(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: PoolDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_POOL, user=user)\n+\n+    def is_authorized_variable(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: VariableDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_VARIABLE, user=user)\n+\n+    def is_authorized_view(\n+        self,\n+        *,\n+        access_view: AccessView,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(\n+            method=\"GET\",\n+            resource_type=_MAP_ACCESS_VIEW_TO_FAB_RESOURCE_TYPE[access_view],\n+            user=user,\n+        )\n+\n+    def is_authorized_custom_view(\n+        self, *, fab_action_name: str, fab_resource_name: str, user: BaseUser | None = None\n+    ) -> bool:\n+        if not user:\n+            user = self.get_user()\n+        user_permissions = self._get_user_permissions(user)\n+        return (fab_action_name, fab_resource_name) in user_permissions\n+\n \n \n \n@@ -288,6 +374,78 @@ class FabAuthManager(BaseAuthManager):\n \n \n \n+    def _is_authorized(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        resource_type: str | tuple[str, ...],\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        \"\"\"\n+        Return whether the user is authorized to perform a given action on a resource.\n+\n+        :param method: the method to perform\n+        :param resource_type: the resource type(s) to perform the action on\n+        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n+\n+        :meta private:\n+        \"\"\"\n+        if not user:\n+            user = self.get_user()\n+\n+        user_permissions = self._get_user_permissions(user)\n+        fab_action = self._get_fab_action(method)\n+\n+        if isinstance(resource_type, str):\n+            resource_type = (resource_type,)\n+\n+        return all((fab_action, resource) in user_permissions for resource in resource_type)\n+\n+    def _is_authorized_dag(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: DagDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        \"\"\"\n+        Return whether the user is authorized to perform a given action on a DAG.\n+\n+        :param method: the method to perform\n+        :param details: optional details about the DAG\n+        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n+\n+        :meta private:\n+        \"\"\"\n+        if not user:\n+            user = self.get_user()\n+\n+        user_permissions = self._get_user_permissions(user)\n+        fab_action = self._get_fab_action(method)\n+\n+        if (fab_action, RESOURCE_DAG) in user_permissions:\n+            return True\n+\n+        if details and details.id:\n+            resource_name = self._resource_name_for_dag(details.id)\n+            return (fab_action, resource_name) in user_permissions\n+\n+        return False\n+\n+    def _get_user_permissions(self, user: BaseUser) -> set[tuple[str, str]]:\n+        \"\"\"\n+        Return the user permissions.\n+\n+        :param user: the user to get permissions for\n+\n+        :meta private:\n+        \"\"\"\n+        if not user:\n+            return set()\n+        if hasattr(user, \"perms\"):\n+            return set(user.perms)\n+        return set()\n+\n     @staticmethod\n     def _get_fab_action(method: ResourceMethod) -> str:\n         \"\"\"\ndiff --git a/airflow/www/security_manager.py b/airflow/www/security_manager.py\nindex bfe0dbf8a2..8945de8d69 100644\n--- a/airflow/www/security_manager.py\n+++ b/airflow/www/security_manager.py\n@@ -334,6 +334,10 @@ class AirflowSecurityManagerV2(LoggingMixin):\n             # Display the \"Browse\", \"Admin\" and \"Docs\" dropdowns in the menu if the user has access to at\n             # least one dropdown child\n             return self._is_authorized_category_menu(fab_resource_name)\n+        else:\n+            return lambda action, resource_pk, user: get_auth_manager().is_authorized_custom_view(\n+                fab_action_name=action, fab_resource_name=fab_resource_name, user=user\n+            )\n \n \n     def _is_authorized_category_menu(self, category: str) -> Callable:\n\n</diff>\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_054",
+        "type": "function",
+        "function": {
+          "name": "submit",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_054",
+    "content": "diff --git a/airflow/auth/managers/base_auth_manager.py b/airflow/auth/managers/base_auth_manager.py\nindex 7dc4c0b099..9cd7e73e30 100644\n--- a/airflow/auth/managers/base_auth_manager.py\n+++ b/airflow/auth/managers/base_auth_manager.py\n@@ -21,6 +21,8 @@ from abc import abstractmethod\n from functools import cached_property\n from typing import TYPE_CHECKING, Container, Literal, Sequence\n \n+ResourceMethod = Literal[\"GET\", \"POST\", \"PUT\", \"DELETE\"]\n+\n from sqlalchemy import select\n \n from airflow.auth.managers.models.resource_details import (\ndiff --git a/airflow/auth/managers/utils/fab.py b/airflow/auth/managers/utils/fab.py\nindex 9e0958284c..88a1c4896d 100644\n--- a/airflow/auth/managers/utils/fab.py\n+++ b/airflow/auth/managers/utils/fab.py\n@@ -30,4 +30,17 @@ from airflow.security.permissions import (\n if TYPE_CHECKING:\n     from airflow.auth.managers.base_auth_manager import ResourceMethod\n \n+METHOD_TO_FAB_ACTION_MAP: dict[ResourceMethod, str] = {\n+    \"POST\": ACTION_CAN_CREATE,\n+    \"GET\": ACTION_CAN_READ,\n+    \"PUT\": ACTION_CAN_EDIT,\n+    \"DELETE\": ACTION_CAN_DELETE,\n+}\n+\n+def get_fab_action_from_method_map() -> dict[ResourceMethod, str]:\n+    return METHOD_TO_FAB_ACTION_MAP\n+\n+def get_method_from_fab_action_map() -> dict[str, ResourceMethod]:\n+    return {v: k for k, v in METHOD_TO_FAB_ACTION_MAP.items()}\n+\n \ndiff --git a/airflow/providers/fab/auth_manager/fab_auth_manager.py b/airflow/providers/fab/auth_manager/fab_auth_manager.py\nindex a4e40d070e..9ac9d58121 100644\n--- a/airflow/providers/fab/auth_manager/fab_auth_manager.py\n+++ b/airflow/providers/fab/auth_manager/fab_auth_manager.py\n@@ -182,6 +182,92 @@ class FabAuthManager(BaseAuthManager):\n         \"\"\"Return whether the user is logged in.\"\"\"\n         return not self.get_user().is_anonymous\n \n+    def is_authorized_configuration(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: ConfigurationDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_CONFIG, user=user)\n+\n+    def is_authorized_connection(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: ConnectionDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_CONNECTION, user=user)\n+\n+    def is_authorized_dag(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        access_entity: DagAccessEntity | None = None,\n+        details: DagDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        if not access_entity:\n+            return self._is_authorized_dag(method=method, details=details, user=user)\n+\n+        dag_method: ResourceMethod = \"GET\" if method == \"GET\" else \"PUT\"\n+\n+        return self._is_authorized_dag(\n+            method=dag_method, details=details, user=user\n+        ) and self._is_authorized(\n+            method=method,\n+            resource_type=self._get_fab_resource_types(access_entity),\n+            user=user,\n+        )\n+\n+    def is_authorized_dataset(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: DatasetDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_DATASET, user=user)\n+\n+    def is_authorized_pool(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: PoolDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_POOL, user=user)\n+\n+    def is_authorized_variable(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: VariableDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(method=method, resource_type=RESOURCE_VARIABLE, user=user)\n+\n+    def is_authorized_view(\n+        self,\n+        *,\n+        access_view: AccessView,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        return self._is_authorized(\n+            method=\"GET\",\n+            resource_type=_MAP_ACCESS_VIEW_TO_FAB_RESOURCE_TYPE[access_view],\n+            user=user,\n+        )\n+\n+    def is_authorized_custom_view(\n+        self, *, fab_action_name: str, fab_resource_name: str, user: BaseUser | None = None\n+    ) -> bool:\n+        if not user:\n+            user = self.get_user()\n+        user_permissions = self._get_user_permissions(user)\n+        return (fab_action_name, fab_resource_name) in user_permissions\n+\n \n \n \n@@ -288,6 +374,78 @@ class FabAuthManager(BaseAuthManager):\n \n \n \n+    def _is_authorized(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        resource_type: str | tuple[str, ...],\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        \"\"\"\n+        Return whether the user is authorized to perform a given action on a resource.\n+\n+        :param method: the method to perform\n+        :param resource_type: the resource type(s) to perform the action on\n+        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n+\n+        :meta private:\n+        \"\"\"\n+        if not user:\n+            user = self.get_user()\n+\n+        user_permissions = self._get_user_permissions(user)\n+        fab_action = self._get_fab_action(method)\n+\n+        if isinstance(resource_type, str):\n+            resource_type = (resource_type,)\n+\n+        return all((fab_action, resource) in user_permissions for resource in resource_type)\n+\n+    def _is_authorized_dag(\n+        self,\n+        *,\n+        method: ResourceMethod,\n+        details: DagDetails | None = None,\n+        user: BaseUser | None = None,\n+    ) -> bool:\n+        \"\"\"\n+        Return whether the user is authorized to perform a given action on a DAG.\n+\n+        :param method: the method to perform\n+        :param details: optional details about the DAG\n+        :param user: the user to perform the action on. If not provided (or None), it uses the current user\n+\n+        :meta private:\n+        \"\"\"\n+        if not user:\n+            user = self.get_user()\n+\n+        user_permissions = self._get_user_permissions(user)\n+        fab_action = self._get_fab_action(method)\n+\n+        if (fab_action, RESOURCE_DAG) in user_permissions:\n+            return True\n+\n+        if details and details.id:\n+            resource_name = self._resource_name_for_dag(details.id)\n+            return (fab_action, resource_name) in user_permissions\n+\n+        return False\n+\n+    def _get_user_permissions(self, user: BaseUser) -> set[tuple[str, str]]:\n+        \"\"\"\n+        Return the user permissions.\n+\n+        :param user: the user to get permissions for\n+\n+        :meta private:\n+        \"\"\"\n+        if not user:\n+            return set()\n+        if hasattr(user, \"perms\"):\n+            return set(user.perms)\n+        return set()\n+\n     @staticmethod\n     def _get_fab_action(method: ResourceMethod) -> str:\n         \"\"\"\ndiff --git a/airflow/www/security_manager.py b/airflow/www/security_manager.py\nindex bfe0dbf8a2..8945de8d69 100644\n--- a/airflow/www/security_manager.py\n+++ b/airflow/www/security_manager.py\n@@ -334,6 +334,10 @@ class AirflowSecurityManagerV2(LoggingMixin):\n             # Display the \"Browse\", \"Admin\" and \"Docs\" dropdowns in the menu if the user has access to at\n             # least one dropdown child\n             return self._is_authorized_category_menu(fab_resource_name)\n+        else:\n+            return lambda action, resource_pk, user: get_auth_manager().is_authorized_custom_view(\n+                fab_action_name=action, fab_resource_name=fab_resource_name, user=user\n+            )\n \n \n     def _is_authorized_category_menu(self, category: str) -> Callable:\n"
+  }
+]

@@ -38,8 +38,9 @@ We welcome community submissions. Results are added through pull requests. At a 
    (186 tasks, the current set). Results on **v0.0** (200 tasks) are still accepted and ranked on
    their own board; see the
    [release notes](https://github.com/LeiLiLab/susvibes/releases/tag/v1.0) for what changed.
-2. **Assemble a submission directory** — a `submission.json` (metadata + scores) plus a
-   `trajectories/` folder with your run's trajectory and summary files.
+2. **Assemble a submission directory** — a `submission.json` (metadata + scores), plus a
+   `trajectories/` folder with your run's trajectory and summary files. Trajectories are optional,
+   but they are what earns the ✅ Verified badge.
 3. **Open a pull request** adding that directory under `public/submissions/` and listing it in
    `manifest.json`.
 

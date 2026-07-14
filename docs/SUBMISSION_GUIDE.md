@@ -1,19 +1,28 @@
 # SusVibes Leaderboard Submission Guide
 
 Community submissions are added to the leaderboard through pull requests. A submission is one
-directory under `public/submissions/` containing these files:
+directory under `public/submissions/`:
 
 ```
 public/submissions/<DIR>/
 ├── submission.json                 # metadata + scores (schema: public/submissions/schema.json)
-└── trajectories/
-    ├── <DIR>.trials.json           # your per-instance trajectories (see TRAJECTORY_FORMAT.md)
-    └── <DIR>.summary.json          # the SusVibes eval summary for your run, verbatim
+└── trajectories/                   # optional — but required to be shown as ✅ Verified
+    ├── <DIR>.trials.json           # per-instance index (see TRAJECTORY_FORMAT.md)
+    ├── <DIR>.summary.json          # the SusVibes eval summary for your run, verbatim
+    └── messages/                   # one trajectory per instance
+        └── <instance_id>.json
 ```
 
-and one line added to `public/submissions/manifest.json`. Here's how it works:
+plus one line added to `public/submissions/manifest.json`.
+
+`submission.json` is the only always-required file. Include `trajectories/` as well and your
+submission shows as ✅ **Verified**; submit scores alone and it shows as ⚠️ **Unverified**
+(see [Step 7](#step-7-review-process)). Here's how it works:
 
 ## Submission Types: Standard vs Custom
+
+Every field named below lives in your `submission.json` — see
+[`schema.json`](../public/submissions/schema.json) for the full field list.
 
 The leaderboard distinguishes between two types of submissions:
 
@@ -24,8 +33,8 @@ Standard submissions use the **default SusVibes evaluation pipeline**:
 - Default prompts and evaluation protocol
 
 If you ran SusVibes as documented — without modifications and without any advanced security
-strategy — your submission is **standard**. You don't need to specify `submission_type` in your
-JSON (it defaults to `"standard"`).
+strategy — your submission is **standard**. You can leave `submission_type` out (it defaults to
+`"standard"`).
 
 ### Custom Submissions
 Custom submissions use **a modified pipeline or approach**, such as:
@@ -38,7 +47,7 @@ Custom submissions use **a modified pipeline or approach**, such as:
 
 Custom submissions **must** include detailed methodology documentation:
 
-1. **Set `submission_type` to `"custom"`** in your submission.json
+1. **Set `submission_type` to `"custom"`**
 
 2. **Provide a `custom_label`** — a short, unique identifier for your approach (e.g., `"prompt-strategy"`, `"reflection"`, `"ensemble"`). This label is used in the directory name and leaderboard display. Must be lowercase alphanumeric with hyphens only (e.g., `multi-turn`).
 
@@ -125,6 +134,23 @@ If you omitted any tasks from your evaluation runs:
    - `submission.json` - Your submission metadata (using schema defined in `public/submissions/schema.json`)
    - `trajectories/` directory - For your trajectory files
 
+**Your scores go in `results.python`** — this is what the leaderboard ranks you on:
+
+```jsonc
+{
+  "results": {
+    "python": {
+      "func_pass_1": 67.2,          // FuncPass@1, as a percentage (0-100)
+      "sec_pass_1": 26.3,           // SecPass@1, as a percentage (0-100)
+      "cost": 1.81                  // optional: average USD per trajectory
+    }
+  }
+}
+```
+
+These must agree with your `<DIR>.summary.json`: `func_pass_1` = `func_pass` × 100, and likewise
+for `sec_pass_1`.
+
 **Important:** If you made any modifications to the default SusVibes evaluation pipeline, set `"submission_type": "custom"`, provide a `"custom_label"`, and include detailed methodology documentation. See [Submission Types](#submission-types-standard-vs-custom) above.
 
 Example directory structure:
@@ -134,25 +160,31 @@ public/submissions/my-awesome-model_agent-framework_default_2025-12-29/
 ├── submission.json
 └── trajectories/
     ├── my-awesome-model_agent-framework_default_2025-12-29.trials.json
-    └── my-awesome-model_agent-framework_default_2025-12-29.summary.json
+    ├── my-awesome-model_agent-framework_default_2025-12-29.summary.json
+    └── messages/
+        └── <instance_id>.json          # one per instance
 
-# Custom submission
+# Custom submission — same layout, custom-{label} in the directory name
 public/submissions/my-awesome-model_agent-framework_custom-prompt-strategy_2025-12-29/
-├── submission.json
-└── trajectories/
-    ├── my-awesome-model_agent-framework_custom-prompt-strategy_2025-12-29.trials.json
-    └── my-awesome-model_agent-framework_custom-prompt-strategy_2025-12-29.summary.json
 ```
 
 ### Step 4: Add Your Trajectory Files
-Your `trajectories/` directory holds **two files**, both named after the submission directory
-(here written `<DIR>`):
+Trajectories are optional, but they are what earns the ✅ Verified badge — include them if you can.
 
-- **`<DIR>.trials.json`** — your per-instance trajectories.
+Your `trajectories/` directory holds two files named after the submission directory (here written
+`<DIR>`), plus the trajectories themselves:
+
+- **`<DIR>.trials.json`** — the per-instance index.
 - **`<DIR>.summary.json`** — the SusVibes eval summary for your run.
+- **`messages/<instance_id>.json`** — one file per trajectory.
 
-The exact format of both is specified in **[TRAJECTORY_FORMAT.md](TRAJECTORY_FORMAT.md)**. Upload
-raw JSON; do not compress or archive.
+**Set `"trajectories_available": true`** in `submission.json` when you include them — the
+leaderboard uses that flag, so leaving it out lands you on ⚠️ Unverified even with the files
+present.
+
+The exact format of both is specified in **[TRAJECTORY_FORMAT.md](TRAJECTORY_FORMAT.md)**. Use the
+**split layout** it recommends — one file per instance under `messages/`, referenced from
+`trials.json`. Upload raw JSON; do not compress or archive.
 
 ### Step 5: Update the Manifest
 Add your directory name to the `submissions` array in `public/submissions/manifest.json`:
@@ -214,7 +246,9 @@ Self-check (maintainers review against the same list):
       `methodology.notes` explains the modifications; `references` links to the implementation;
       `methodology.verification.modified_prompts` is set appropriately
 - [ ] Any framework modifications / task omissions are documented in the PR description
-- [ ] `trajectories/` contains `<DIR>.trials.json` **and** `<DIR>.summary.json` in the
+- [ ] `results.python.func_pass_1` / `sec_pass_1` carry your scores (percentages, 0–100)
+- [ ] **If submitting trajectories:** `trajectories_available` is `true`, and `trajectories/`
+      contains `<DIR>.trials.json` **and** `<DIR>.summary.json` in the
       [required format](TRAJECTORY_FORMAT.md), covering every instance you evaluated
 - [ ] `func_pass` / `sec_pass` in the summary match the scores in `submission.json`
 - [ ] Raw JSON files (not compressed/archived); no duplicate submission

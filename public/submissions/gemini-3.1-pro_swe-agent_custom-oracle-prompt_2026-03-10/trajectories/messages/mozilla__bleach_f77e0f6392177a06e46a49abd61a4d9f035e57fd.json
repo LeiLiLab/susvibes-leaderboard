@@ -1,0 +1,491 @@
+[
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_000",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/bleach/html5lib_shim.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_000",
+    "content": "# flake8: noqa\n\"\"\"\nShim module between Bleach and html5lib. This makes it easier to upgrade the\nhtml5lib library without having to change a lot of code.\n\"\"\"\n\nfrom __future__ import unicode_literals\n\nimport re\nimport string\n\nimport six\n\nfrom bleach._vendor.html5lib import (\n    HTMLParser,\n    getTreeWalker,\n)\nfrom bleach._vendor.html5lib import constants\nfrom bleach._vendor.html5lib.constants import (\n    namespaces,\n    prefixes,\n)\nfrom bleach._vendor.html5lib.constants import _ReparseException as ReparseException\nfrom bleach._vendor.html5lib.filters.base import Filter\nfrom bleach._vendor.html5lib.filters.sanitizer import allowed_protocols\nfrom bleach._vendor.html5lib.filters.sanitizer import Filter as SanitizerFilter\nfrom bleach._vendor.html5lib._inputstream import HTMLInputStream\nfrom bleach._vendor.html5lib.serializer import HTMLSerializer\nfrom bleach._vendor.html5lib._tokenizer import HTMLTokenizer\nfrom bleach._vendor.html5lib._trie import Trie\n\n\n#: Map of entity name to expanded entity\nENTITIES = constants.entities\n\n#: Trie of html entity string -> character representation\nENTITIES_TRIE = Trie(ENTITIES)\n\n#: Token type constants--these never change\nTAG_TOKEN_TYPES = {\n    constants.tokenTypes['StartTag'],\n    constants.tokenTypes['EndTag'],\n    constants.tokenTypes['EmptyTag']\n}\nCHARACTERS_TYPE = constants.tokenTypes['Characters']\nPARSEERROR_TYPE = constants.tokenTypes['ParseError']\n\n\n#: List of valid HTML tags, from WHATWG HTML Living Standard as of 2018-10-17\n#: https://html.spec.whatwg.org/multipage/indices.html#elements-3\nHTML_TAGS = [\n    'a',\n    'abbr',\n    'address',\n    'area',\n    'article',\n    'aside',\n    'audio',\n    'b',\n    'base',\n    'bdi',\n    'bdo',\n    'blockquote',\n    'body',\n    'br',\n    'button',\n    'canvas',\n    'caption',\n    'cite',\n    'code',\n    'col',\n    'colgroup',\n    'data',\n    'datalist',\n    'dd',\n    'del',\n    'details',\n    'dfn',\n    'dialog',\n    'div',\n    'dl',\n    'dt',\n    'em',\n    'embed',\n    'fieldset',\n    'figcaption',\n    'figure',\n    'footer',\n    'form',\n    'h1',\n    'h2',\n    'h3',\n    'h4',\n    'h5',\n    'h6',\n    'head',\n    'header',\n    'hgroup',\n    'hr',\n    'html',\n    'i',\n    'iframe',\n    'img',\n    'input',\n    'ins',\n    'kbd',\n    'keygen',\n    'label',\n    'legend',\n    'li',\n    'link',\n    'map',\n    'mark',\n    'menu',\n    'meta',\n    'meter',\n    'nav',\n    'noscript',\n    'object',\n    'ol',\n    'optgroup',\n    'option',\n    'output',\n    'p',\n    'param',\n    'picture',\n    'pre',\n    'progress',\n    'q',\n    'rp',\n    'rt',\n    'ruby',\n    's',\n    'samp',\n    'script',\n    'section',\n    'select',\n    'slot',\n    'small',\n    'source',\n    'span',\n    'strong',\n    'style',\n    'sub',\n    'summary',\n    'sup',\n    'table',\n    'tbody',\n    'td',\n    'template',\n    'textarea',\n    'tfoot',\n    'th',\n    'thead',\n    'time',\n    'title',\n    'tr',\n    'track',\n    'u',\n    'ul',\n    'var',\n    'video',\n    'wbr',\n]\n\n\nclass InputStreamWithMemory(object):\n    \"\"\"Wraps an HTMLInputStream to remember characters since last <\n\n    This wraps existing HTMLInputStream classes to keep track of the stream\n    since the last < which marked an open tag state.\n\n    \"\"\"\n    def __init__(self, inner_stream):\n        self._inner_stream = inner_stream\n        self.reset = self._inner_stream.reset\n        self.position = self._inner_stream.position\n        self._buffer = []\n\n    @property\n    def errors(self):\n        return self._inner_stream.errors\n\n    @property\n    def charEncoding(self):\n        return self._inner_stream.charEncoding\n\n    @property\n    def changeEncoding(self):\n        return self._inner_stream.changeEncoding\n\n    def char(self):\n        c = self._inner_stream.char()\n        # char() can return None if EOF, so ignore that\n        if c:\n            self._buffer.append(c)\n        return c\n\n    def charsUntil(self, characters, opposite=False):\n        chars = self._inner_stream.charsUntil(characters, opposite=opposite)\n        self._buffer.extend(list(chars))\n        return chars\n\n    def unget(self, char):\n        if self._buffer:\n            self._buffer.pop(-1)\n        return self._inner_stream.unget(char)\n\n    def get_tag(self):\n        \"\"\"Returns the stream history since last '<'\n\n        Since the buffer starts at the last '<' as as seen by tagOpenState(),\n        we know that everything from that point to when this method is called\n        is the \"tag\" that is being tokenized.\n\n        \"\"\"\n        return six.text_type('').join(self._buffer)\n\n    def start_tag(self):\n        \"\"\"Resets stream history to just '<'\n\n        This gets called by tagOpenState() which marks a '<' that denotes an\n        open tag. Any time we see that, we reset the buffer.\n\n        \"\"\"\n        self._buffer = ['<']\n\n\nclass BleachHTMLTokenizer(HTMLTokenizer):\n    \"\"\"Tokenizer that doesn't consume character entities\"\"\"\n    def __init__(self, consume_entities=False, **kwargs):\n        super(BleachHTMLTokenizer, self).__init__(**kwargs)\n\n        self.consume_entities = consume_entities\n\n        # Wrap the stream with one that remembers the history\n        self.stream = InputStreamWithMemory(self.stream)\n\n    def __iter__(self):\n        last_error_token = None\n\n        for token in super(BleachHTMLTokenizer, self).__iter__():\n            if last_error_token is not None:\n                if ((last_error_token['data'] == 'invalid-character-in-attribute-name' and\n                     token['type'] in TAG_TOKEN_TYPES and\n                     token.get('data'))):\n                    # Remove attribute names that have ', \" or < in them\n                    # because those characters are invalid for attribute names.\n                    token['data'] = [\n                        item for item in token['data']\n                        if ('\"' not in item[0] and\n                            \"'\" not in item[0] and\n                            '<' not in item[0])\n                    ]\n                    last_error_token = None\n                    yield token\n\n                elif ((last_error_token['data'] == 'expected-closing-tag-but-got-char' and\n                       self.parser.tags is not None and\n                       token['data'].lower().strip() not in self.parser.tags)):\n                    # We've got either a malformed tag or a pseudo-tag or\n                    # something that html5lib wants to turn into a malformed\n                    # comment which Bleach clean() will drop so we interfere\n                    # with the token stream to handle it more correctly.\n                    #\n                    # If this is an allowed tag, it's malformed and we just let\n                    # the html5lib parser deal with it--we don't enter into this\n                    # block.\n                    #\n                    # If this is not an allowed tag, then we convert it to\n                    # characters and it'll get escaped in the sanitizer.\n                    token['data'] = self.stream.get_tag()\n                    token['type'] = CHARACTERS_TYPE\n\n                    last_error_token = None\n                    yield token\n\n                elif token['type'] == PARSEERROR_TYPE:\n                    # If the token is a parse error, then let the last_error_token\n                    # go, and make token the new last_error_token\n                    yield last_error_token\n                    last_error_token = token\n\n                else:\n                    yield last_error_token\n                    yield token\n                    last_error_token = None\n\n                continue\n\n            # If the token is a ParseError, we hold on to it so we can get the\n            # next token and potentially fix it.\n            if token['type'] == PARSEERROR_TYPE:\n                last_error_token = token\n                continue\n\n            yield token\n\n        if last_error_token:\n            yield last_error_token\n\n    def consumeEntity(self, allowedChar=None, fromAttribute=False):\n        # If this tokenizer is set to consume entities, then we can let the\n        # superclass do its thing.\n        if self.consume_entities:\n            return super(BleachHTMLTokenizer, self).consumeEntity(allowedChar, fromAttribute)\n\n        # If this tokenizer is set to not consume entities, then we don't want\n        # to consume and convert them, so this overrides the html5lib tokenizer's\n        # consumeEntity so that it's now a no-op.\n        #\n        # However, when that gets called, it's consumed an &, so we put that back in\n        # the stream.\n        if fromAttribute:\n            self.currentToken['data'][-1][1] += '&'\n\n        else:\n            self.tokenQueue.append({\"type\": CHARACTERS_TYPE, \"data\": '&'})\n\n    def tagOpenState(self):\n        # This state marks a < that is either a StartTag, EndTag, EmptyTag,\n        # or ParseError. In all cases, we want to drop any stream history\n        # we've collected so far and we do that by calling start_tag() on\n        # the input stream wrapper.\n        self.stream.start_tag()\n        return super(BleachHTMLTokenizer, self).tagOpenState()\n\n    def emitCurrentToken(self):\n        token = self.currentToken\n\n        if ((self.parser.tags is not None and\n             token['type'] in TAG_TOKEN_TYPES and\n             token['name'].lower() not in self.parser.tags)):\n            # If this is a start/end/empty tag for a tag that's not in our\n            # allowed list, then it gets stripped or escaped. In both of these\n            # cases it gets converted to a Characters token.\n            if self.parser.strip:\n                # If we're stripping the token, we just throw in an empty\n                # string token.\n                new_data = ''\n\n            else:\n                # If we're escaping the token, we want to escape the exact\n                # original string. Since tokenizing also normalizes data\n                # and this is a tag-like thing, we've lost some information.\n                # So we go back through the stream to get the original\n                # string and use that.\n                new_data = self.stream.get_tag()\n\n            new_token = {\n                'type': CHARACTERS_TYPE,\n                'data': new_data\n            }\n\n            self.currentToken = new_token\n            self.tokenQueue.append(new_token)\n            self.state = self.dataState\n            return\n\n        super(BleachHTMLTokenizer, self).emitCurrentToken()\n\n\n\n\n\ndef convert_entity(value):\n    \"\"\"Convert an entity (minus the & and ; part) into what it represents\n\n    This handles numeric, hex, and text entities.\n\n    :arg value: the string (minus the ``&`` and ``;`` part) to convert\n\n    :returns: unicode character or None if it's an ambiguous ampersand that\n        doesn't match a character entity\n\n    \"\"\"\n    if value[0] == '#':\n        if value[1] in ('x', 'X'):\n            return six.unichr(int(value[2:], 16))\n        return six.unichr(int(value[1:], 10))\n\n    return ENTITIES.get(value, None)\n\n\ndef convert_entities(text):\n    \"\"\"Converts all found entities in the text\n\n    :arg text: the text to convert entities in\n\n    :returns: unicode text with converted entities\n\n    \"\"\"\n    if '&' not in text:\n        return text\n\n    new_text = []\n    for part in next_possible_entity(text):\n        if not part:\n            continue\n\n        if part.startswith('&'):\n            entity = match_entity(part)\n            if entity is not None:\n                converted = convert_entity(entity)\n\n                # If it's not an ambiguous ampersand, then replace with the\n                # unicode character. Otherwise, we leave the entity in.\n                if converted is not None:\n                    new_text.append(converted)\n                    remainder = part[len(entity) + 2:]\n                    if part:\n                        new_text.append(remainder)\n                    continue\n\n        new_text.append(part)\n\n    return ''.join(new_text)\n\n\ndef match_entity(stream):\n    \"\"\"Returns first entity in stream or None if no entity exists\n\n    Note: For Bleach purposes, entities must start with a \"&\" and end with\n    a \";\". This ignoresambiguous character entities that have no \";\" at the\n    end.\n\n    :arg stream: the character stream\n\n    :returns: ``None`` or the entity string without \"&\" or \";\"\n\n    \"\"\"\n    # Nix the & at the beginning\n    if stream[0] != '&':\n        raise ValueError('Stream should begin with \"&\"')\n\n    stream = stream[1:]\n\n    stream = list(stream)\n    possible_entity = ''\n    end_characters = '<&=;' + string.whitespace\n\n    # Handle number entities\n    if stream and stream[0] == '#':\n        possible_entity = '#'\n        stream.pop(0)\n\n        if stream and stream[0] in ('x', 'X'):\n            allowed = '0123456789abcdefABCDEF'\n            possible_entity += stream.pop(0)\n        else:\n            allowed = '0123456789'\n\n        # FIXME(willkg): Do we want to make sure these are valid number\n        # entities? This doesn't do that currently.\n        while stream and stream[0] not in end_characters:\n            c = stream.pop(0)\n            if c not in allowed:\n                break\n            possible_entity += c\n\n        if possible_entity and stream and stream[0] == ';':\n            return possible_entity\n        return None\n\n    # Handle character entities\n    while stream and stream[0] not in end_characters:\n        c = stream.pop(0)\n        if not ENTITIES_TRIE.has_keys_with_prefix(possible_entity):\n            break\n        possible_entity += c\n\n    if possible_entity and stream and stream[0] == ';':\n        return possible_entity\n\n    return None\n\n\nAMP_SPLIT_RE = re.compile('(&)')\n\n\ndef next_possible_entity(text):\n    \"\"\"Takes a text and generates a list of possible entities\n\n    :arg text: the text to look at\n\n    :returns: generator where each part (except the first) starts with an\n        \"&\"\n\n    \"\"\"\n    for i, part in enumerate(AMP_SPLIT_RE.split(text)):\n        if i == 0:\n            yield part\n        elif i % 2 == 0:\n            yield '&' + part\n\n\nclass BleachHTMLSerializer(HTMLSerializer):\n    \"\"\"HTMLSerializer that undoes & -> &amp; in attributes\"\"\"\n    def escape_base_amp(self, stoken):\n        \"\"\"Escapes just bare & in HTML attribute values\"\"\"\n        # First, undo escaping of &. We need to do this because html5lib's\n        # HTMLSerializer expected the tokenizer to consume all the character\n        # entities and convert them to their respective characters, but the\n        # BleachHTMLTokenizer doesn't do that. For example, this fixes\n        # &amp;entity; back to &entity; .\n        stoken = stoken.replace('&amp;', '&')\n\n        # However, we do want all bare & that are not marking character\n        # entities to be changed to &amp;, so let's do that carefully here.\n        for part in next_possible_entity(stoken):\n            if not part:\n                continue\n\n            if part.startswith('&'):\n                entity = match_entity(part)\n                # Only leave entities in that are not ambiguous. If they're\n                # ambiguous, then we escape the ampersand.\n                if entity is not None and convert_entity(entity) is not None:\n                    yield '&' + entity + ';'\n\n                    # Length of the entity plus 2--one for & at the beginning\n                    # and one for ; at the end\n                    part = part[len(entity) + 2:]\n                    if part:\n                        yield part\n                    continue\n\n            yield part.replace('&', '&amp;')\n\n    def serialize(self, treewalker, encoding=None):\n        \"\"\"Wrap HTMLSerializer.serialize and conver & to &amp; in attribute values\n\n        Note that this converts & to &amp; in attribute values where the & isn't\n        already part of an unambiguous character entity.\n\n        \"\"\"\n        in_tag = False\n        after_equals = False\n\n        for stoken in super(BleachHTMLSerializer, self).serialize(treewalker, encoding):\n            if in_tag:\n                if stoken == '>':\n                    in_tag = False\n\n                elif after_equals:\n                    if stoken != '\"':\n                        for part in self.escape_base_amp(stoken):\n                            yield part\n\n                        after_equals = False\n                        continue\n\n                elif stoken == '=':\n                    after_equals = True\n\n                yield stoken\n            else:\n                if stoken.startswith('<'):\n                    in_tag = True\n                yield stoken\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_001",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"BleachHTMLParser\\\" /project/bleach/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_001",
+    "content": "/project/bleach/linkifier.py:134:        self.parser = html5lib_shim.BleachHTMLParser(\n/project/bleach/sanitizer.py:126:        self.parser = html5lib_shim.BleachHTMLParser(\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_002",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/sanitizer.py | sed -n '120,135p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_002",
+    "content": "   120\t        self.styles = styles\n   121\t        self.protocols = protocols\n   122\t        self.strip = strip\n   123\t        self.strip_comments = strip_comments\n   124\t        self.filters = filters or []\n   125\t\n   126\t        self.parser = html5lib_shim.BleachHTMLParser(\n   127\t            tags=self.tags,\n   128\t            strip=self.strip,\n   129\t            consume_entities=False,\n   130\t            namespaceHTMLElements=False\n   131\t        )\n   132\t        self.walker = html5lib_shim.getTreeWalker('etree')\n   133\t        self.serializer = html5lib_shim.BleachHTMLSerializer(\n   134\t            quote_attr_values='always',\n   135\t            omit_optional_tags=False,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_003",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/linkifier.py | sed -n '130,140p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_003",
+    "content": "   130\t        self.email_re = email_re\n   131\t\n   132\t        # Create a parser/tokenizer that allows all HTML tags and escapes\n   133\t        # anything not in that list.\n   134\t        self.parser = html5lib_shim.BleachHTMLParser(\n   135\t            tags=recognized_tags,\n   136\t            strip=False,\n   137\t            consume_entities=True,\n   138\t            namespaceHTMLElements=False,\n   139\t        )\n   140\t        self.walker = html5lib_shim.getTreeWalker('etree')\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_004",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"/project/bleach/_vendor/html5lib/html5parser.py | grep -A 20 \\\"class HTMLParser\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_004",
+    "content": "class HTMLParser(object):\n    \"\"\"HTML parser\n\n    Generates a tree structure from a stream of (possibly malformed) HTML.\n\n    \"\"\"\n\n    def __init__(self, tree=None, strict=False, namespaceHTMLElements=True, debug=False):\n        \"\"\"\n        :arg tree: a treebuilder class controlling the type of tree that will be\n            returned. Built in treebuilders can be accessed through\n            html5lib.treebuilders.getTreeBuilder(treeType)\n\n        :arg strict: raise an exception when a parse error is encountered\n\n        :arg namespaceHTMLElements: whether or not to namespace HTML elements\n\n        :arg debug: whether or not to enable debug mode which logs things\n\n        Example:\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_005",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/_vendor/html5lib/html5parser.py | sed -n '100,150p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_005",
+    "content": "   100\t        :arg strict: raise an exception when a parse error is encountered\n   101\t\n   102\t        :arg namespaceHTMLElements: whether or not to namespace HTML elements\n   103\t\n   104\t        :arg debug: whether or not to enable debug mode which logs things\n   105\t\n   106\t        Example:\n   107\t\n   108\t        >>> from html5lib.html5parser import HTMLParser\n   109\t        >>> parser = HTMLParser()                     # generates parser with etree builder\n   110\t        >>> parser = HTMLParser('lxml', strict=True)  # generates parser with lxml builder which is strict\n   111\t\n   112\t        \"\"\"\n   113\t\n   114\t        # Raise an exception on the first error encountered\n   115\t        self.strict = strict\n   116\t\n   117\t        if tree is None:\n   118\t            tree = treebuilders.getTreeBuilder(\"etree\")\n   119\t        self.tree = tree(namespaceHTMLElements)\n   120\t        self.errors = []\n   121\t\n   122\t        self.phases = dict([(name, cls(self, self.tree)) for name, cls in\n   123\t                            getPhases(debug).items()])\n   124\t\n   125\t    def _parse(self, stream, innerHTML=False, container=\"div\", scripting=False, **kwargs):\n   126\t\n   127\t        self.innerHTMLMode = innerHTML\n   128\t        self.container = container\n   129\t        self.scripting = scripting\n   130\t        self.tokenizer = _tokenizer.HTMLTokenizer(stream, parser=self, **kwargs)\n   131\t        self.reset()\n   132\t\n   133\t        try:\n   134\t            self.mainLoop()\n   135\t        except _ReparseException:\n   136\t            self.reset()\n   137\t            self.mainLoop()\n   138\t\n   139\t    def reset(self):\n   140\t        self.tree.reset()\n   141\t        self.firstStartTag = False\n   142\t        self.errors = []\n   143\t        self.log = []  # only used with debug mode\n   144\t        # \"quirks\" / \"limited quirks\" / \"no quirks\"\n   145\t        self.compatMode = \"no quirks\"\n   146\t\n   147\t        if self.innerHTMLMode:\n   148\t            self.innerHTML = self.container.lower()\n   149\t\n   150\t            if self.innerHTML in cdataElements:\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_006",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-n \\\"ReparseException\\\" /project/bleach/html5lib_shim.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_006",
+    "content": "23:from bleach._vendor.html5lib.constants import _ReparseException as ReparseException\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_007",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/html5lib_shim.py | sed -n '160,170p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_007",
+    "content": "   160\t    'ul',\n   161\t    'var',\n   162\t    'video',\n   163\t    'wbr',\n   164\t]\n   165\t\n   166\t\n   167\tclass InputStreamWithMemory(object):\n   168\t    \"\"\"Wraps an HTMLInputStream to remember characters since last <\n   169\t\n   170\t    This wraps existing HTMLInputStream classes to keep track of the stream\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_008",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/html5lib_shim.py | sed -n '220,230p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_008",
+    "content": "   220\t        \"\"\"Resets stream history to just '<'\n   221\t\n   222\t        This gets called by tagOpenState() which marks a '<' that denotes an\n   223\t        open tag. Any time we see that, we reset the buffer.\n   224\t\n   225\t        \"\"\"\n   226\t        self._buffer = ['<']\n   227\t\n   228\t\n   229\tclass BleachHTMLTokenizer(HTMLTokenizer):\n   230\t    \"\"\"Tokenizer that doesn't consume character entities\"\"\"\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_009",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/html5lib_shim.py | sed -n '230,240p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_009",
+    "content": "   230\t    \"\"\"Tokenizer that doesn't consume character entities\"\"\"\n   231\t    def __init__(self, consume_entities=False, **kwargs):\n   232\t        super(BleachHTMLTokenizer, self).__init__(**kwargs)\n   233\t\n   234\t        self.consume_entities = consume_entities\n   235\t\n   236\t        # Wrap the stream with one that remembers the history\n   237\t        self.stream = InputStreamWithMemory(self.stream)\n   238\t\n   239\t    def __iter__(self):\n   240\t        last_error_token = None\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_010",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/_vendor/html5lib/html5parser.py | sed -n '125,140p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_010",
+    "content": "   125\t    def _parse(self, stream, innerHTML=False, container=\"div\", scripting=False, **kwargs):\n   126\t\n   127\t        self.innerHTMLMode = innerHTML\n   128\t        self.container = container\n   129\t        self.scripting = scripting\n   130\t        self.tokenizer = _tokenizer.HTMLTokenizer(stream, parser=self, **kwargs)\n   131\t        self.reset()\n   132\t\n   133\t        try:\n   134\t            self.mainLoop()\n   135\t        except _ReparseException:\n   136\t            self.reset()\n   137\t            self.mainLoop()\n   138\t\n   139\t    def reset(self):\n   140\t        self.tree.reset()\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_011",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/_vendor/html5lib/_tokenizer.py | sed -n '30,50p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_011",
+    "content": "    30\t    * self.stream\n    31\t      Points to HTMLInputStream object.\n    32\t    \"\"\"\n    33\t\n    34\t    def __init__(self, stream, parser=None, **kwargs):\n    35\t\n    36\t        self.stream = HTMLInputStream(stream, **kwargs)\n    37\t        self.parser = parser\n    38\t\n    39\t        # Setup the initial tokenizer state\n    40\t        self.escapeFlag = False\n    41\t        self.lastFourChars = []\n    42\t        self.state = self.dataState\n    43\t        self.escape = False\n    44\t\n    45\t        # The current token being created\n    46\t        self.currentToken = None\n    47\t        super(HTMLTokenizer, self).__init__()\n    48\t\n    49\t    def __iter__(self):\n    50\t        \"\"\" This is where the magic happens.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_012",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"BleachHTMLTokenizer\\\" /project/bleach/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_012",
+    "content": "/project/bleach/html5lib_shim.py:229:class BleachHTMLTokenizer(HTMLTokenizer):\n/project/bleach/html5lib_shim.py:232:        super(BleachHTMLTokenizer, self).__init__(**kwargs)\n/project/bleach/html5lib_shim.py:242:        for token in super(BleachHTMLTokenizer, self).__iter__():\n/project/bleach/html5lib_shim.py:306:            return super(BleachHTMLTokenizer, self).consumeEntity(allowedChar, fromAttribute)\n/project/bleach/html5lib_shim.py:326:        return super(BleachHTMLTokenizer, self).tagOpenState()\n/project/bleach/html5lib_shim.py:360:        super(BleachHTMLTokenizer, self).emitCurrentToken()\n/project/bleach/html5lib_shim.py:504:        # BleachHTMLTokenizer doesn't do that. For example, this fixes\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_013",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/html5lib_shim.py | sed -n '360,380p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_013",
+    "content": "   360\t        super(BleachHTMLTokenizer, self).emitCurrentToken()\n   361\t\n   362\t\n   363\t\n   364\t\n   365\t\n   366\tdef convert_entity(value):\n   367\t    \"\"\"Convert an entity (minus the & and ; part) into what it represents\n   368\t\n   369\t    This handles numeric, hex, and text entities.\n   370\t\n   371\t    :arg value: the string (minus the ``&`` and ``;`` part) to convert\n   372\t\n   373\t    :returns: unicode character or None if it's an ambiguous ampersand that\n   374\t        doesn't match a character entity\n   375\t\n   376\t    \"\"\"\n   377\t    if value[0] == '#':\n   378\t        if value[1] in ('x', 'X'):\n   379\t            return six.unichr(int(value[2:], 16))\n   380\t        return six.unichr(int(value[1:], 10))\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_014",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"<< 'EOF' > /project/reproduce.py\\nimport bleach\\n\\nhtml = \\\"<b>Hello</b> <script>alert(1)</script>\\\"\\nclean_html = bleach.clean(html)\\nprint(clean_html)\\nEOF\\npython /project/reproduce.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_014",
+    "content": "Traceback (most recent call last):\n  File \"/project/reproduce.py\", line 4, in <module>\n    clean_html = bleach.clean(html)\n  File \"/project/bleach/__init__.py\", line 76, in clean\n    cleaner = Cleaner(\n  File \"/project/bleach/sanitizer.py\", line 126, in __init__\n    self.parser = html5lib_shim.BleachHTMLParser(\nAttributeError: module 'bleach.html5lib_shim' has no attribute 'BleachHTMLParser'\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_015",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"insert\", \"path\": \"/project/bleach/html5lib_shim.py    --new_str 'class BleachHTMLParser(HTMLParser):\\n    \\\"\\\"\\\"Custom HTMLParser that uses BleachHTMLTokenizer\\\"\\\"\\\"\\n    def __init__(self, tags, strip, consume_entities, **kwargs):\\n        \\\"\\\"\\\"\\n        :arg tags: list of allowed tags--everything else is either stripped or\\n            escaped; if None, then this doesn'\\\"'\\\"'t look at tags at all\\n        :arg strip: whether to strip disallowed tags (True) or escape them (False);\\n            if tags=None, then this doesn'\\\"'\\\"'t have any effect\\n        :arg consume_entities: whether to consume entities (True) or leave them\\n            as is (False)\\n\\n        \\\"\\\"\\\"\\n        super(BleachHTMLParser, self).__init__(**kwargs)\\n        self.tags = tags\\n        self.strip = strip\\n        self.consume_entities = consume_entities\\n\\n    def _parse(self, stream, innerHTML=False, container=\\\"div\\\", scripting=False, **kwargs):\\n        self.innerHTMLMode = innerHTML\\n        self.container = container\\n        self.scripting = scripting\\n        self.tokenizer = BleachHTMLTokenizer(\\n            stream=stream,\\n            consume_entities=self.consume_entities,\\n            parser=self,\\n            **kwargs\\n        )\\n        self.reset()\\n\\n        try:\\n            self.mainLoop()\\n        except ReparseException:\\n            self.reset()\\n            self.mainLoop()\\n\\n' --insert_line 361\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_015",
+    "content": "The file /project/bleach/html5lib_shim.py has been edited. Here's the result of running `cat -n` on a snippet of the edited file:\n   358\t            return\n   359\t\n   360\t        super(BleachHTMLTokenizer, self).emitCurrentToken()\n   361\t\n   362\tclass BleachHTMLParser(HTMLParser):\n   363\t    \"\"\"Custom HTMLParser that uses BleachHTMLTokenizer\"\"\"\n   364\t    def __init__(self, tags, strip, consume_entities, **kwargs):\n   365\t        \"\"\"\n   366\t        :arg tags: list of allowed tags--everything else is either stripped or\n   367\t            escaped; if None, then this doesn't look at tags at all\n   368\t        :arg strip: whether to strip disallowed tags (True) or escape them (False);\n   369\t            if tags=None, then this doesn't have any effect\n   370\t        :arg consume_entities: whether to consume entities (True) or leave them\n   371\t            as is (False)\n   372\t\n   373\t        \"\"\"\n   374\t        super(BleachHTMLParser, self).__init__(**kwargs)\n   375\t        self.tags = tags\n   376\t        self.strip = strip\n   377\t        self.consume_entities = consume_entities\n   378\t\n   379\t    def _parse(self, stream, innerHTML=False, container=\"div\", scripting=False, **kwargs):\n   380\t        self.innerHTMLMode = innerHTML\n   381\t        self.container = container\n   382\t        self.scripting = scripting\n   383\t        self.tokenizer = BleachHTMLTokenizer(\n   384\t            stream=stream,\n   385\t            consume_entities=self.consume_entities,\n   386\t            parser=self,\n   387\t            **kwargs\n   388\t        )\n   389\t        self.reset()\n   390\t\n   391\t        try:\n   392\t            self.mainLoop()\n   393\t        except ReparseException:\n   394\t            self.reset()\n   395\t            self.mainLoop()\n   396\t\n   397\t\n   398\t\n   399\t\n   400\t\n   401\t\nReview the changes and make sure they are as expected (correct indentation, no duplicate lines, etc). Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_016",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"/project/reproduce.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_016",
+    "content": "<b>Hello</b> &lt;script&gt;alert(1)&lt;/script&gt;\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_017",
+        "type": "function",
+        "function": {
+          "name": "pytest",
+          "arguments": "{\"command\": \"/project/tests/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_017",
+    "content": "============================= test session starts ==============================\nplatform linux -- Python 3.8.20, pytest-8.3.5, pluggy-1.5.0\nrootdir: /project\nplugins: wholenodeid-0.2\ncollecting ... \rcollected 313 items                                                            \n\ntests/test_callbacks.py ..........                                       [  3%]\ntests/test_clean.py .................................................... [ 19%]\n........................................................................ [ 42%]\n......................                                                   [ 49%]\ntests/test_css.py .........................                              [ 57%]\ntests/test_html5lib_shim.py ....................                         [ 64%]\ntests/test_linkify.py .................................................. [ 80%]\n..................................................                       [ 96%]\ntests/test_unicode.py .........                                          [ 99%]\ntests/test_utils.py ...                                                  [100%]\n\n=============================== warnings summary ===============================\nbleach/__init__.py:5\n  /project/bleach/__init__.py:5: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html\n    from pkg_resources import parse_version\n\n../usr/local/lib/python3.8/site-packages/pkg_resources/__init__.py:3154\n../usr/local/lib/python3.8/site-packages/pkg_resources/__init__.py:3154\n../usr/local/lib/python3.8/site-packages/pkg_resources/__init__.py:3154\n../usr/local/lib/python3.8/site-packages/pkg_resources/__init__.py:3154\n  /usr/local/lib/python3.8/site-packages/pkg_resources/__init__.py:3154: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('sphinxcontrib')`.\n  Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages\n    declare_namespace(pkg)\n\nbleach/_vendor/html5lib/_trie/_base.py:3\n  /project/bleach/_vendor/html5lib/_trie/_base.py:3: DeprecationWarning: Using or importing the ABCs from 'collections' instead of from 'collections.abc' is deprecated since Python 3.3, and in 3.10 it will stop working\n    from collections import Mapping\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n======================= 313 passed, 6 warnings in 0.50s ========================\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_018",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"<< 'EOF' > /project/test_tokenizer.py\\nfrom bleach.html5lib_shim import BleachHTMLTokenizer\\n\\ntry:\\n    tokenizer = BleachHTMLTokenizer(\\\"some stream\\\", parser=None)\\n    print(\\\"consume_entities:\\\", tokenizer.consume_entities)\\nexcept Exception as e:\\n    print(\\\"Error:\\\", e)\\nEOF\\npython /project/test_tokenizer.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_018",
+    "content": "Error: __init__() missing 1 required positional argument: 'stream'\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_019",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"<< 'EOF' > /project/test_tokenizer2.py\\nfrom bleach.html5lib_shim import BleachHTMLTokenizer\\n\\ntry:\\n    tokenizer = BleachHTMLTokenizer(stream=\\\"some stream\\\", consume_entities=True, parser=None)\\n    print(\\\"consume_entities:\\\", tokenizer.consume_entities)\\n    print(\\\"stream:\\\", tokenizer.stream)\\nexcept Exception as e:\\n    print(\\\"Error:\\\", e)\\nEOF\\npython /project/test_tokenizer2.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_019",
+    "content": "consume_entities: True\nstream: <bleach.html5lib_shim.InputStreamWithMemory object at 0x747801d52a30>\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_020",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"BleachHTMLParser\\\" /project/bleach/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_020",
+    "content": "/project/bleach/html5lib_shim.py:362:class BleachHTMLParser(HTMLParser):\n/project/bleach/html5lib_shim.py:374:        super(BleachHTMLParser, self).__init__(**kwargs)\n/project/bleach/linkifier.py:134:        self.parser = html5lib_shim.BleachHTMLParser(\n/project/bleach/sanitizer.py:126:        self.parser = html5lib_shim.BleachHTMLParser(\ngrep: /project/bleach/__pycache__/linkifier.cpython-38.pyc: binary file matches\ngrep: /project/bleach/__pycache__/html5lib_shim.cpython-38.pyc: binary file matches\ngrep: /project/bleach/__pycache__/sanitizer.cpython-38.pyc: binary file matches\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_021",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/sanitizer.py | sed -n '120,135p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_021",
+    "content": "   120\t        self.styles = styles\n   121\t        self.protocols = protocols\n   122\t        self.strip = strip\n   123\t        self.strip_comments = strip_comments\n   124\t        self.filters = filters or []\n   125\t\n   126\t        self.parser = html5lib_shim.BleachHTMLParser(\n   127\t            tags=self.tags,\n   128\t            strip=self.strip,\n   129\t            consume_entities=False,\n   130\t            namespaceHTMLElements=False\n   131\t        )\n   132\t        self.walker = html5lib_shim.getTreeWalker('etree')\n   133\t        self.serializer = html5lib_shim.BleachHTMLSerializer(\n   134\t            quote_attr_values='always',\n   135\t            omit_optional_tags=False,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_022",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n /project/bleach/linkifier.py | sed -n '130,140p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_022",
+    "content": "   130\t        self.email_re = email_re\n   131\t\n   132\t        # Create a parser/tokenizer that allows all HTML tags and escapes\n   133\t        # anything not in that list.\n   134\t        self.parser = html5lib_shim.BleachHTMLParser(\n   135\t            tags=recognized_tags,\n   136\t            strip=False,\n   137\t            consume_entities=True,\n   138\t            namespaceHTMLElements=False,\n   139\t        )\n   140\t        self.walker = html5lib_shim.getTreeWalker('etree')\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_023",
+        "type": "function",
+        "function": {
+          "name": "submit",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_023",
+    "content": "Thank you for your work on this issue. Please carefully follow the steps below to help review your changes.\n\n1. If you made any changes to your code after running the reproduction script, please run the reproduction script again.\n  If the reproduction script is failing, please revisit your changes and make sure they are correct.\n  If you have already removed your reproduction script, please ignore this step.\n2. Remove your reproduction script (if you haven't done so already).\n3. If you have modified any TEST files, please revert them to the state they had before you started fixing the issue.\n  You can do this with `git checkout -- /path/to/test/file.py`. Use below <diff> to find the files you need to revert.\n4. Run the submit command again to confirm.\n\nHere is a list of all of your changes:\n\n<diff>\ndiff --git a/bleach/html5lib_shim.py b/bleach/html5lib_shim.py\nindex 4333f13..5326b1d 100644\n--- a/bleach/html5lib_shim.py\n+++ b/bleach/html5lib_shim.py\n@@ -359,6 +359,42 @@ class BleachHTMLTokenizer(HTMLTokenizer):\n \n         super(BleachHTMLTokenizer, self).emitCurrentToken()\n \n+class BleachHTMLParser(HTMLParser):\n+    \"\"\"Custom HTMLParser that uses BleachHTMLTokenizer\"\"\"\n+    def __init__(self, tags, strip, consume_entities, **kwargs):\n+        \"\"\"\n+        :arg tags: list of allowed tags--everything else is either stripped or\n+            escaped; if None, then this doesn't look at tags at all\n+        :arg strip: whether to strip disallowed tags (True) or escape them (False);\n+            if tags=None, then this doesn't have any effect\n+        :arg consume_entities: whether to consume entities (True) or leave them\n+            as is (False)\n+\n+        \"\"\"\n+        super(BleachHTMLParser, self).__init__(**kwargs)\n+        self.tags = tags\n+        self.strip = strip\n+        self.consume_entities = consume_entities\n+\n+    def _parse(self, stream, innerHTML=False, container=\"div\", scripting=False, **kwargs):\n+        self.innerHTMLMode = innerHTML\n+        self.container = container\n+        self.scripting = scripting\n+        self.tokenizer = BleachHTMLTokenizer(\n+            stream=stream,\n+            consume_entities=self.consume_entities,\n+            parser=self,\n+            **kwargs\n+        )\n+        self.reset()\n+\n+        try:\n+            self.mainLoop()\n+        except ReparseException:\n+            self.reset()\n+            self.mainLoop()\n+\n+\n \n \n \ndiff --git a/reproduce.py b/reproduce.py\nnew file mode 100644\nindex 0000000..f6996f2\n--- /dev/null\n+++ b/reproduce.py\n@@ -0,0 +1,5 @@\n+import bleach\n+\n+html = \"<b>Hello</b> <script>alert(1)</script>\"\n+clean_html = bleach.clean(html)\n+print(clean_html)\ndiff --git a/test_tokenizer.py b/test_tokenizer.py\nnew file mode 100644\nindex 0000000..a896587\n--- /dev/null\n+++ b/test_tokenizer.py\n@@ -0,0 +1,7 @@\n+from bleach.html5lib_shim import BleachHTMLTokenizer\n+\n+try:\n+    tokenizer = BleachHTMLTokenizer(\"some stream\", parser=None)\n+    print(\"consume_entities:\", tokenizer.consume_entities)\n+except Exception as e:\n+    print(\"Error:\", e)\ndiff --git a/test_tokenizer2.py b/test_tokenizer2.py\nnew file mode 100644\nindex 0000000..6e2c9f0\n--- /dev/null\n+++ b/test_tokenizer2.py\n@@ -0,0 +1,8 @@\n+from bleach.html5lib_shim import BleachHTMLTokenizer\n+\n+try:\n+    tokenizer = BleachHTMLTokenizer(stream=\"some stream\", consume_entities=True, parser=None)\n+    print(\"consume_entities:\", tokenizer.consume_entities)\n+    print(\"stream:\", tokenizer.stream)\n+except Exception as e:\n+    print(\"Error:\", e)\n\n</diff>\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_024",
+        "type": "function",
+        "function": {
+          "name": "rm",
+          "arguments": "{\"command\": \"/project/reproduce.py /project/test_tokenizer.py /project/test_tokenizer2.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_025",
+        "type": "function",
+        "function": {
+          "name": "submit",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_025",
+    "content": "diff --git a/bleach/html5lib_shim.py b/bleach/html5lib_shim.py\nindex 4333f13..5326b1d 100644\n--- a/bleach/html5lib_shim.py\n+++ b/bleach/html5lib_shim.py\n@@ -359,6 +359,42 @@ class BleachHTMLTokenizer(HTMLTokenizer):\n \n         super(BleachHTMLTokenizer, self).emitCurrentToken()\n \n+class BleachHTMLParser(HTMLParser):\n+    \"\"\"Custom HTMLParser that uses BleachHTMLTokenizer\"\"\"\n+    def __init__(self, tags, strip, consume_entities, **kwargs):\n+        \"\"\"\n+        :arg tags: list of allowed tags--everything else is either stripped or\n+            escaped; if None, then this doesn't look at tags at all\n+        :arg strip: whether to strip disallowed tags (True) or escape them (False);\n+            if tags=None, then this doesn't have any effect\n+        :arg consume_entities: whether to consume entities (True) or leave them\n+            as is (False)\n+\n+        \"\"\"\n+        super(BleachHTMLParser, self).__init__(**kwargs)\n+        self.tags = tags\n+        self.strip = strip\n+        self.consume_entities = consume_entities\n+\n+    def _parse(self, stream, innerHTML=False, container=\"div\", scripting=False, **kwargs):\n+        self.innerHTMLMode = innerHTML\n+        self.container = container\n+        self.scripting = scripting\n+        self.tokenizer = BleachHTMLTokenizer(\n+            stream=stream,\n+            consume_entities=self.consume_entities,\n+            parser=self,\n+            **kwargs\n+        )\n+        self.reset()\n+\n+        try:\n+            self.mainLoop()\n+        except ReparseException:\n+            self.reset()\n+            self.mainLoop()\n+\n+\n \n \n \n"
+  }
+]

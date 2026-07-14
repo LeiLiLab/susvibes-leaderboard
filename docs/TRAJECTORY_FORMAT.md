@@ -15,7 +15,7 @@ public/submissions/<DIR>/
 └── trajectories/
     ├── <DIR>.trials.json               # per-instance records (this spec)
     ├── <DIR>.summary.json              # SusVibes eval summary
-    └── messages/                       # only for the "split" format
+    └── messages/                       # one file per instance (the recommended "split" layout)
         └── <instance_id>.json
 ```
 
@@ -39,7 +39,7 @@ A JSON array of per-instance records:
   "model_name_or_path": "gemini/gemini-3-pro-preview",  // model id as your run recorded it
   "run_metadata": { ... },                    // run metadata (below) — NOT a chat message
   "tools": [ ... ],                           // OpenAI tool (function) schemas available to the agent
-  "messages": [ ... ]                         // OpenAI messages (below); inline array OR a path
+  "messages": "messages/<instance_id>.json"   // path to the messages file (or an inline array)
 }
 ```
 
@@ -50,7 +50,7 @@ A JSON array of per-instance records:
 | `model_name_or_path` | string | Model id as your run recorded it (e.g. `bedrock/zai.glm-5`). Stored metadata — the leaderboard display name comes from `submission.json`'s `model_name`, not this field. |
 | `run_metadata` | object | Run metadata. Not part of `messages` (see below). |
 | `tools` | array | OpenAI tool (function) schemas available to the agent (see below). |
-| `messages` | array \| string | OpenAI messages **inline**, or a `"messages/<id>.json"` path (split format). |
+| `messages` | string \| array | Path to a `"messages/<id>.json"` file (**recommended**), or the OpenAI messages inline. |
 
 ### `messages` — OpenAI chat format
 
@@ -147,17 +147,9 @@ The visualizer shows `subtype` as **Termination**, `num_turns` as **Turns**, and
 
 ---
 
-## Inline vs split format
+## Split vs inline format
 
-**Inline** — `messages` is the array, everything in one file:
-
-```jsonc
-[ { "instance_id": "...", "model_patch": "...", "model_name_or_path": "...", "run_metadata": {...},
-    "messages": [ {"role": "assistant", ...}, {"role": "tool", ...} ] } ]
-```
-
-**Split** — for large submissions, `messages` is a path; the referenced file holds the
-messages array:
+**Split — use this.** `messages` is a path; the referenced file holds the messages array:
 
 ```jsonc
 // <DIR>.trials.json
@@ -166,6 +158,16 @@ messages array:
 
 // trajectories/messages/<instance_id>.json
 [ {"role": "assistant", ...}, {"role": "tool", ...} ]
+```
+
+A full run inlined is a ~40 MB `trials.json` that the visualizer must download in full to show one
+trajectory.
+
+**Inline** — `messages` is the array, everything in one file. Fine for a small or partial run:
+
+```jsonc
+[ { "instance_id": "...", "model_patch": "...", "model_name_or_path": "...", "run_metadata": {...},
+    "messages": [ {"role": "assistant", ...}, {"role": "tool", ...} ] } ]
 ```
 
 Both are supported; a single submission may mix them.

@@ -8,6 +8,7 @@ scripts under `maintenance/`. Detailed Python code-style rules follow the `susvi
 - **Think before coding.** State your assumptions explicitly and surface tradeoffs; don't assume, don't hide confusion. If uncertain, ask before implementing.
 - **Simplicity first.** The minimum code that solves the problem — nothing speculative, no features beyond what was asked. If a senior engineer would call it overcomplicated, simplify; 200 lines that could be 50, rewrite.
 - **Consistency is paramount.** I hold the strictest bar on matching the existing codebase in every detail — naming, structure, idiom. Before adding anything new, find a counterpart already in the repo and mirror it.
+- **Write for the reader.** Before writing any doc, comment, or displayed message, name who reads it and what they need from it. Cut what they can't act on or can't parse.
 
 ## Environment
 - Node/npm/build/dev commands run in conda env `sv-ld` (e.g. `conda run -n sv-ld npm run dev`).

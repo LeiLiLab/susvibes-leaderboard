@@ -1,0 +1,894 @@
+[
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_000",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"lib/streamlit/components/v1/components.py | grep -n -A 20 \\\"class ComponentRequestHandler\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_000",
+    "content": "306:class ComponentRequestHandler(tornado.web.RequestHandler):\n307-    def initialize(self, registry: \"ComponentRegistry\"):\n308-        self._registry = registry\n309-\n310-    def get(self, path: str) -> None:\n311-        pass\n312-\n313-    def set_extra_headers(self, path) -> None:\n314-        \"\"\"Disable cache for HTML files.\n315-\n316-        Other assets like JS and CSS are suffixed with their hash, so they can\n317-        be cached indefinitely.\n318-        \"\"\"\n319-        is_index_url = len(path) == 0\n320-\n321-        if is_index_url or path.endswith(\".html\"):\n322-            self.set_header(\"Cache-Control\", \"no-cache\")\n323-        else:\n324-            self.set_header(\"Cache-Control\", \"public\")\n325-\n326-    def set_default_headers(self) -> None:\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_001",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n lib/streamlit/components/v1/components.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_001",
+    "content": "     1\t# Copyright 2018-2022 Streamlit Inc.\n     2\t#\n     3\t# Licensed under the Apache License, Version 2.0 (the \"License\");\n     4\t# you may not use this file except in compliance with the License.\n     5\t# You may obtain a copy of the License at\n     6\t#\n     7\t#    http://www.apache.org/licenses/LICENSE-2.0\n     8\t#\n     9\t# Unless required by applicable law or agreed to in writing, software\n    10\t# distributed under the License is distributed on an \"AS IS\" BASIS,\n    11\t# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n    12\t# See the License for the specific language governing permissions and\n    13\t# limitations under the License.\n    14\t\n    15\timport inspect\n    16\timport json\n    17\timport mimetypes\n    18\timport os\n    19\timport threading\n    20\tfrom typing import Any, Dict, Optional, Type, Union\n    21\t\n    22\timport tornado.web\n    23\tfrom streamlit.scriptrunner import get_script_run_ctx\n    24\t\n    25\timport streamlit.server.routes\n    26\tfrom streamlit import type_util\n    27\tfrom streamlit.elements.form import current_form_id\n    28\tfrom streamlit import util\n    29\tfrom streamlit.errors import StreamlitAPIException\n    30\tfrom streamlit.logger import get_logger\n    31\tfrom streamlit.proto.Components_pb2 import SpecialArg, ArrowTable as ArrowTableProto\n    32\tfrom streamlit.proto.Element_pb2 import Element\n    33\tfrom streamlit.state import NoValue, register_widget\n    34\tfrom streamlit.type_util import to_bytes\n    35\t\n    36\tLOGGER = get_logger(__name__)\n    37\t\n    38\t\n    39\tclass MarshallComponentException(StreamlitAPIException):\n    40\t    \"\"\"Class for exceptions generated during custom component marshalling.\"\"\"\n    41\t\n    42\t    pass\n    43\t\n    44\t\n    45\tclass CustomComponent:\n    46\t    \"\"\"A Custom Component declaration.\"\"\"\n    47\t\n    48\t    def __init__(\n    49\t        self,\n    50\t        name: str,\n    51\t        path: Optional[str] = None,\n    52\t        url: Optional[str] = None,\n    53\t    ):\n    54\t        if (path is None and url is None) or (path is not None and url is not None):\n    55\t            raise StreamlitAPIException(\n    56\t                \"Either 'path' or 'url' must be set, but not both.\"\n    57\t            )\n    58\t\n    59\t        self.name = name\n    60\t        self.path = path\n    61\t        self.url = url\n    62\t\n    63\t    def __repr__(self) -> str:\n    64\t        return util.repr_(self)\n    65\t\n    66\t    @property\n    67\t    def abspath(self) -> Optional[str]:\n    68\t        \"\"\"The absolute path that the component is served from.\"\"\"\n    69\t        if self.path is None:\n    70\t            return None\n    71\t        return os.path.abspath(self.path)\n    72\t\n    73\t    def __call__(\n    74\t        self,\n    75\t        *args,\n    76\t        default: Any = None,\n    77\t        key: Optional[str] = None,\n    78\t        **kwargs,\n    79\t    ) -> Any:\n    80\t        \"\"\"An alias for create_instance.\"\"\"\n    81\t        return self.create_instance(*args, default=default, key=key, **kwargs)\n    82\t\n    83\t    def create_instance(\n    84\t        self,\n    85\t        *args,\n    86\t        default: Any = None,\n    87\t        key: Optional[str] = None,\n    88\t        **kwargs,\n    89\t    ) -> Any:\n    90\t        \"\"\"Create a new instance of the component.\n    91\t\n    92\t        Parameters\n    93\t        ----------\n    94\t        *args\n    95\t            Must be empty; all args must be named. (This parameter exists to\n    96\t            enforce correct use of the function.)\n    97\t        default: any or None\n    98\t            The default return value for the component. This is returned when\n    99\t            the component's frontend hasn't yet specified a value with\n   100\t            `setComponentValue`.\n   101\t        key: str or None\n   102\t            If not None, this is the user key we use to generate the\n   103\t            component's \"widget ID\".\n   104\t        **kwargs\n   105\t            Keyword args to pass to the component.\n   106\t\n   107\t        Returns\n   108\t        -------\n   109\t        any or None\n   110\t            The component's widget value.\n   111\t\n   112\t        \"\"\"\n   113\t        if len(args) > 0:\n   114\t            raise MarshallComponentException(f\"Argument '{args[0]}' needs a label\")\n   115\t\n   116\t        try:\n   117\t            import pyarrow\n   118\t            from streamlit.components.v1 import component_arrow\n   119\t        except ImportError:\n   120\t            raise StreamlitAPIException(\n   121\t                \"\"\"To use Custom Components in Streamlit, you need to install\n   122\tPyArrow. To do so locally:\n   123\t\n   124\t`pip install pyarrow`\n   125\t\n   126\tAnd if you're using Streamlit Cloud, add \"pyarrow\" to your requirements.txt.\"\"\"\n   127\t            )\n   128\t\n   129\t        # In addition to the custom kwargs passed to the component, we also\n   130\t        # send the special 'default' and 'key' params to the component\n   131\t        # frontend.\n   132\t        all_args = dict(kwargs, **{\"default\": default, \"key\": key})\n   133\t\n   134\t        json_args = {}\n   135\t        special_args = []\n   136\t        for arg_name, arg_val in all_args.items():\n   137\t            if type_util.is_bytes_like(arg_val):\n   138\t                bytes_arg = SpecialArg()\n   139\t                bytes_arg.key = arg_name\n   140\t                bytes_arg.bytes = to_bytes(arg_val)\n   141\t                special_args.append(bytes_arg)\n   142\t            elif type_util.is_dataframe_like(arg_val):\n   143\t                dataframe_arg = SpecialArg()\n   144\t                dataframe_arg.key = arg_name\n   145\t                component_arrow.marshall(dataframe_arg.arrow_dataframe.data, arg_val)\n   146\t                special_args.append(dataframe_arg)\n   147\t            else:\n   148\t                json_args[arg_name] = arg_val\n   149\t\n   150\t        try:\n   151\t            serialized_json_args = json.dumps(json_args)\n   152\t        except BaseException as e:\n   153\t            raise MarshallComponentException(\n   154\t                \"Could not convert component args to JSON\", e\n   155\t            )\n   156\t\n   157\t        def marshall_component(dg, element: Element) -> Union[Any, Type[NoValue]]:\n   158\t            element.component_instance.component_name = self.name\n   159\t            element.component_instance.form_id = current_form_id(dg)\n   160\t            if self.url is not None:\n   161\t                element.component_instance.url = self.url\n   162\t\n   163\t            # Normally, a widget's element_hash (which determines\n   164\t            # its identity across multiple runs of an app) is computed\n   165\t            # by hashing the entirety of its protobuf. This means that,\n   166\t            # if any of the arguments to the widget are changed, Streamlit\n   167\t            # considers it a new widget instance and it loses its previous\n   168\t            # state.\n   169\t            #\n   170\t            # However! If a *component* has a `key` argument, then the\n   171\t            # component's hash identity is determined by entirely by\n   172\t            # `component_name + url + key`. This means that, when `key`\n   173\t            # exists, the component will maintain its identity even when its\n   174\t            # other arguments change, and the component's iframe won't be\n   175\t            # remounted on the frontend.\n   176\t            #\n   177\t            # So: if `key` is None, we marshall the element's arguments\n   178\t            # *before* computing its widget_ui_value (which creates its hash).\n   179\t            # If `key` is not None, we marshall the arguments *after*.\n   180\t\n   181\t            def marshall_element_args():\n   182\t                element.component_instance.json_args = serialized_json_args\n   183\t                element.component_instance.special_args.extend(special_args)\n   184\t\n   185\t            if key is None:\n   186\t                marshall_element_args()\n   187\t\n   188\t            def deserialize_component(ui_value, widget_id=\"\"):\n   189\t                # ui_value is an object from json, an ArrowTable proto, or a bytearray\n   190\t                return ui_value\n   191\t\n   192\t            ctx = get_script_run_ctx()\n   193\t            component_state = register_widget(\n   194\t                element_type=\"component_instance\",\n   195\t                element_proto=element.component_instance,\n   196\t                user_key=key,\n   197\t                widget_func_name=self.name,\n   198\t                deserializer=deserialize_component,\n   199\t                serializer=lambda x: x,\n   200\t                ctx=ctx,\n   201\t            )\n   202\t            widget_value = component_state.value\n   203\t\n   204\t            if key is not None:\n   205\t                marshall_element_args()\n   206\t\n   207\t            if widget_value is None:\n   208\t                widget_value = default\n   209\t            elif isinstance(widget_value, ArrowTableProto):\n   210\t                widget_value = component_arrow.arrow_proto_to_dataframe(widget_value)\n   211\t\n   212\t            # widget_value will be either None or whatever the component's most\n   213\t            # recent setWidgetValue value is. We coerce None -> NoValue,\n   214\t            # because that's what DeltaGenerator._enqueue expects.\n   215\t            return widget_value if widget_value is not None else NoValue\n   216\t\n   217\t        # We currently only support writing to st._main, but this will change\n   218\t        # when we settle on an improved API in a post-layout world.\n   219\t        dg = streamlit._main\n   220\t\n   221\t        element = Element()\n   222\t        return_value = marshall_component(dg, element)\n   223\t        result = dg._enqueue(\n   224\t            \"component_instance\", element.component_instance, return_value\n   225\t        )\n   226\t\n   227\t        return result\n   228\t\n   229\t    def __eq__(self, other) -> bool:\n   230\t        \"\"\"Equality operator.\"\"\"\n   231\t        return (\n   232\t            isinstance(other, CustomComponent)\n   233\t            and self.name == other.name\n   234\t            and self.path == other.path\n   235\t            and self.url == other.url\n   236\t        )\n   237\t\n   238\t    def __ne__(self, other) -> bool:\n   239\t        \"\"\"Inequality operator.\"\"\"\n   240\t        return not self == other\n   241\t\n   242\t    def __str__(self) -> str:\n   243\t        return f\"'{self.name}': {self.path if self.path is not None else self.url}\"\n   244\t\n   245\t\n   246\tdef declare_component(\n   247\t    name: str,\n   248\t    path: Optional[str] = None,\n   249\t    url: Optional[str] = None,\n   250\t) -> CustomComponent:\n   251\t    \"\"\"Create and register a custom component.\n   252\t\n   253\t    Parameters\n   254\t    ----------\n   255\t    name: str\n   256\t        A short, descriptive name for the component. Like, \"slider\".\n   257\t    path: str or None\n   258\t        The path to serve the component's frontend files from. Either\n   259\t        `path` or `url` must be specified, but not both.\n   260\t    url: str or None\n   261\t        The URL that the component is served from. Either `path` or `url`\n   262\t        must be specified, but not both.\n   263\t\n   264\t    Returns\n   265\t    -------\n   266\t    CustomComponent\n   267\t        A CustomComponent that can be called like a function.\n   268\t        Calling the component will create a new instance of the component\n   269\t        in the Streamlit app.\n   270\t\n   271\t    \"\"\"\n   272\t\n   273\t    # Get our stack frame.\n   274\t    current_frame = inspect.currentframe()\n   275\t    assert current_frame is not None\n   276\t\n   277\t    # Get the stack frame of our calling function.\n   278\t    caller_frame = current_frame.f_back\n   279\t    assert caller_frame is not None\n   280\t\n   281\t    # Get the caller's module name. `__name__` gives us the module's\n   282\t    # fully-qualified name, which includes its package.\n   283\t    module = inspect.getmodule(caller_frame)\n   284\t    assert module is not None\n   285\t    module_name = module.__name__\n   286\t\n   287\t    # If the caller was the main module that was executed (that is, if the\n   288\t    # user executed `python my_component.py`), then this name will be\n   289\t    # \"__main__\" instead of the actual package name. In this case, we use\n   290\t    # the main module's filename, sans `.py` extension, as the component name.\n   291\t    if module_name == \"__main__\":\n   292\t        file_path = inspect.getfile(caller_frame)\n   293\t        filename = os.path.basename(file_path)\n   294\t        module_name, _ = os.path.splitext(filename)\n   295\t\n   296\t    # Build the component name.\n   297\t    component_name = f\"{module_name}.{name}\"\n   298\t\n   299\t    # Create our component object, and register it.\n   300\t    component = CustomComponent(name=component_name, path=path, url=url)\n   301\t    ComponentRegistry.instance().register_component(component)\n   302\t\n   303\t    return component\n   304\t\n   305\t\n   306\tclass ComponentRequestHandler(tornado.web.RequestHandler):\n   307\t    def initialize(self, registry: \"ComponentRegistry\"):\n   308\t        self._registry = registry\n   309\t\n   310\t    def get(self, path: str) -> None:\n   311\t        pass\n   312\t\n   313\t    def set_extra_headers(self, path) -> None:\n   314\t        \"\"\"Disable cache for HTML files.\n   315\t\n   316\t        Other assets like JS and CSS are suffixed with their hash, so they can\n   317\t        be cached indefinitely.\n   318\t        \"\"\"\n   319\t        is_index_url = len(path) == 0\n   320\t\n   321\t        if is_index_url or path.endswith(\".html\"):\n   322\t            self.set_header(\"Cache-Control\", \"no-cache\")\n   323\t        else:\n   324\t            self.set_header(\"Cache-Control\", \"public\")\n   325\t\n   326\t    def set_default_headers(self) -> None:\n   327\t        if streamlit.server.routes.allow_cross_origin_requests():\n   328\t            self.set_header(\"Access-Control-Allow-Origin\", \"*\")\n   329\t\n   330\t    def options(self) -> None:\n   331\t        \"\"\"/OPTIONS handler for preflight CORS checks.\"\"\"\n   332\t        self.set_status(204)\n   333\t        self.finish()\n   334\t\n   335\t    @staticmethod\n   336\t    def get_content_type(abspath) -> str:\n   337\t        \"\"\"Returns the ``Content-Type`` header to be used for this request.\n   338\t        From tornado.web.StaticFileHandler.\n   339\t        \"\"\"\n   340\t        mime_type, encoding = mimetypes.guess_type(abspath)\n   341\t        # per RFC 6713, use the appropriate type for a gzip compressed file\n   342\t        if encoding == \"gzip\":\n   343\t            return \"application/gzip\"\n   344\t        # As of 2015-07-21 there is no bzip2 encoding defined at\n   345\t        # http://www.iana.org/assignments/media-types/media-types.xhtml\n   346\t        # So for that (and any other encoding), use octet-stream.\n   347\t        elif encoding is not None:\n   348\t            return \"application/octet-stream\"\n   349\t        elif mime_type is not None:\n   350\t            return mime_type\n   351\t        # if mime_type not detected, use application/octet-stream\n   352\t        else:\n   353\t            return \"application/octet-stream\"\n   354\t\n   355\t    @staticmethod\n   356\t    def get_url(file_id: str) -> str:\n   357\t        \"\"\"Return the URL for a component file with the given ID.\"\"\"\n   358\t        return \"components/{}\".format(file_id)\n   359\t\n   360\t\n   361\tclass ComponentRegistry:\n   362\t    _instance_lock: threading.Lock = threading.Lock()\n   363\t    _instance: Optional[\"ComponentRegistry\"] = None\n   364\t\n   365\t    @classmethod\n   366\t    def instance(cls) -> \"ComponentRegistry\":\n   367\t        \"\"\"Returns the singleton ComponentRegistry\"\"\"\n   368\t        # We use a double-checked locking optimization to avoid the overhead\n   369\t        # of acquiring the lock in the common case:\n   370\t        # https://en.wikipedia.org/wiki/Double-checked_locking\n   371\t        if cls._instance is None:\n   372\t            with cls._instance_lock:\n   373\t                if cls._instance is None:\n   374\t                    cls._instance = ComponentRegistry()\n   375\t        return cls._instance\n   376\t\n   377\t    def __init__(self):\n   378\t        self._components = {}  # type: Dict[str, CustomComponent]\n   379\t        self._lock = threading.Lock()\n   380\t\n   381\t    def __repr__(self) -> str:\n   382\t        return util.repr_(self)\n   383\t\n   384\t    def register_component(self, component: CustomComponent) -> None:\n   385\t        \"\"\"Register a CustomComponent.\n   386\t\n   387\t        Parameters\n   388\t        ----------\n   389\t        component : CustomComponent\n   390\t            The component to register.\n   391\t        \"\"\"\n   392\t\n   393\t        # Validate the component's path\n   394\t        abspath = component.abspath\n   395\t        if abspath is not None and not os.path.isdir(abspath):\n   396\t            raise StreamlitAPIException(f\"No such component directory: '{abspath}'\")\n   397\t\n   398\t        with self._lock:\n   399\t            existing = self._components.get(component.name)\n   400\t            self._components[component.name] = component\n   401\t\n   402\t        if existing is not None and component != existing:\n   403\t            LOGGER.warning(\n   404\t                \"%s overriding previously-registered %s\",\n   405\t                component,\n   406\t                existing,\n   407\t            )\n   408\t\n   409\t        LOGGER.debug(\"Registered component %s\", component)\n   410\t\n   411\t    def get_component_path(self, name: str) -> Optional[str]:\n   412\t        \"\"\"Return the filesystem path for the component with the given name.\n   413\t\n   414\t        If no such component is registered, or if the component exists but is\n   415\t        being served from a URL, return None instead.\n   416\t        \"\"\"\n   417\t        component = self._components.get(name, None)\n   418\t        return component.abspath if component is not None else None\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_002",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"ComponentRequestHandler\\\" lib/streamlit/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_002",
+    "content": "lib/streamlit/components/v1/components.py:306:class ComponentRequestHandler(tornado.web.RequestHandler):\nlib/streamlit/server/server.py:65:from streamlit.components.v1.components import ComponentRequestHandler\nlib/streamlit/server/server.py:393:                ComponentRequestHandler,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_003",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n lib/streamlit/server/server.py | sed -n '380,400p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_003",
+    "content": "   380\t                dict(\n   381\t                    file_mgr=self._uploaded_file_mgr,\n   382\t                    get_session_info=self._get_session_info,\n   383\t                ),\n   384\t            ),\n   385\t            (\n   386\t                make_url_path_regex(base, \"assets/(.*)\"),\n   387\t                AssetsFileHandler,\n   388\t                {\"path\": \"%s/\" % file_util.get_assets_dir()},\n   389\t            ),\n   390\t            (make_url_path_regex(base, \"media/(.*)\"), MediaFileHandler, {\"path\": \"\"}),\n   391\t            (\n   392\t                make_url_path_regex(base, \"component/(.*)\"),\n   393\t                ComponentRequestHandler,\n   394\t                dict(registry=ComponentRegistry.instance()),\n   395\t            ),\n   396\t        ]\n   397\t\n   398\t        if config.get_option(\"server.scriptHealthCheckEnabled\"):\n   399\t            routes.extend(\n   400\t                [\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_004",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"command\": \". -name \\\"*component*test*.py\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_004",
+    "content": "./lib/tests/streamlit/components_test.py\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_005",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"lib/tests/streamlit/components_test.py | grep -n -A 30 \\\"class ComponentRequestHandlerTest\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_005",
+    "content": "400:class ComponentRequestHandlerTest(tornado.testing.AsyncHTTPTestCase):\n401-    \"\"\"Test /component endpoint.\"\"\"\n402-\n403-    def tearDown(self) -> None:\n404-        ComponentRegistry._instance = None\n405-\n406-    def get_app(self):\n407-        self.registry = ComponentRegistry()\n408-        return tornado.web.Application(\n409-            [\n410-                (\n411-                    \"/component/(.*)\",\n412-                    ComponentRequestHandler,\n413-                    dict(registry=self.registry.instance()),\n414-                )\n415-            ]\n416-        )\n417-\n418-    def _request_component(self, path):\n419-        return self.fetch(\"/component/%s\" % path, method=\"GET\")\n420-\n421-    def test_success_request(self):\n422-        \"\"\"Test request success when valid parameters are provided.\"\"\"\n423-\n424-        with mock.patch(\"streamlit.components.v1.components.os.path.isdir\"):\n425-            # We don't need the return value in this case.\n426-            declare_component(\"test\", path=PATH)\n427-\n428-        with mock.patch(\n429-            \"streamlit.components.v1.components.open\",\n430-            mock.mock_open(read_data=\"Test Content\"),\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_006",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n lib/tests/streamlit/components_test.py | sed -n '420,480p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_006",
+    "content": "   420\t\n   421\t    def test_success_request(self):\n   422\t        \"\"\"Test request success when valid parameters are provided.\"\"\"\n   423\t\n   424\t        with mock.patch(\"streamlit.components.v1.components.os.path.isdir\"):\n   425\t            # We don't need the return value in this case.\n   426\t            declare_component(\"test\", path=PATH)\n   427\t\n   428\t        with mock.patch(\n   429\t            \"streamlit.components.v1.components.open\",\n   430\t            mock.mock_open(read_data=\"Test Content\"),\n   431\t        ):\n   432\t            response = self._request_component(\"components_test.test\")\n   433\t\n   434\t        self.assertEqual(200, response.code)\n   435\t        self.assertEqual(b\"Test Content\", response.body)\n   436\t\n   437\t    def test_invalid_component_request(self):\n   438\t        \"\"\"Test request failure when invalid component name is provided.\"\"\"\n   439\t\n   440\t        response = self._request_component(\"invalid_component\")\n   441\t        self.assertEqual(404, response.code)\n   442\t        self.assertEqual(b\"not found\", response.body)\n   443\t\n   444\t    def test_invalid_content_request(self):\n   445\t        \"\"\"Test request failure when invalid content (file) is provided.\"\"\"\n   446\t\n   447\t        with mock.patch(\"streamlit.components.v1.components.os.path.isdir\"):\n   448\t            declare_component(\"test\", path=PATH)\n   449\t\n   450\t        with mock.patch(\"streamlit.components.v1.components.open\") as m:\n   451\t            m.side_effect = OSError(\"Invalid content\")\n   452\t            response = self._request_component(\"components_test.test\")\n   453\t\n   454\t        self.assertEqual(404, response.code)\n   455\t        self.assertEqual(\n   456\t            b\"read error\",\n   457\t            response.body,\n   458\t        )\n   459\t\n   460\t    def test_support_binary_files_request(self):\n   461\t        \"\"\"Test support for binary files reads.\"\"\"\n   462\t\n   463\t        def _open_read(m, payload):\n   464\t            is_binary = False\n   465\t            args, kwargs = m.call_args\n   466\t            if len(args) > 1:\n   467\t                if \"b\" in args[1]:\n   468\t                    is_binary = True\n   469\t            encoding = \"utf-8\"\n   470\t            if \"encoding\" in kwargs:\n   471\t                encoding = kwargs[\"encoding\"]\n   472\t\n   473\t            if is_binary:\n   474\t                from io import BytesIO\n   475\t\n   476\t                return BytesIO(payload)\n   477\t            else:\n   478\t                from io import TextIOWrapper\n   479\t\n   480\t                return TextIOWrapper(str(payload, encoding=encoding))\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_007",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"-n lib/tests/streamlit/components_test.py | sed -n '480,520p'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_007",
+    "content": "   480\t                return TextIOWrapper(str(payload, encoding=encoding))\n   481\t\n   482\t        with mock.patch(\"streamlit.components.v1.components.os.path.isdir\"):\n   483\t            declare_component(\"test\", path=PATH)\n   484\t\n   485\t        payload = b\"\\x00\\x01\\x00\\x00\\x00\\x0D\\x00\\x80\"  # binary non utf-8 payload\n   486\t\n   487\t        with mock.patch(\"streamlit.components.v1.components.open\") as m:\n   488\t            m.return_value.__enter__ = lambda _: _open_read(m, payload)\n   489\t            response = self._request_component(\"components_test.test\")\n   490\t\n   491\t        self.assertEqual(200, response.code)\n   492\t        self.assertEqual(\n   493\t            payload,\n   494\t            response.body,\n   495\t        )\n   496\t\n   497\t\n   498\tclass IFrameTest(testutil.DeltaGeneratorTestCase):\n   499\t    def test_iframe(self):\n   500\t        \"\"\"Test components.iframe\"\"\"\n   501\t        components.iframe(\"http://not.a.url\", width=200, scrolling=True)\n   502\t\n   503\t        el = self.get_delta_from_queue().new_element\n   504\t        self.assertEqual(el.iframe.src, \"http://not.a.url\")\n   505\t        self.assertEqual(el.iframe.srcdoc, \"\")\n   506\t        self.assertEqual(el.iframe.width, 200)\n   507\t        self.assertTrue(el.iframe.has_width)\n   508\t        self.assertTrue(el.iframe.scrolling)\n   509\t\n   510\t    def test_html(self):\n   511\t        \"\"\"Test components.html\"\"\"\n   512\t        html = r\"<html><body>An HTML string!</body></html>\"\n   513\t        components.html(html, width=200, scrolling=True)\n   514\t\n   515\t        el = self.get_delta_from_queue().new_element\n   516\t        self.assertEqual(el.iframe.src, \"\")\n   517\t        self.assertEqual(el.iframe.srcdoc, html)\n   518\t        self.assertEqual(el.iframe.width, 200)\n   519\t        self.assertTrue(el.iframe.has_width)\n   520\t        self.assertTrue(el.iframe.scrolling)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_008",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"def test_\\\" lib/tests/streamlit/components_test.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_008",
+    "content": "67:    def test_name(self):\n99:    def test_only_path(self):\n118:    def test_only_url(self):\n129:    def test_path_and_url(self):\n138:    def test_no_path_and_no_url(self):\n154:    def test_register_component_with_path(self):\n171:    def test_register_component_no_path(self):\n184:    def test_register_invalid_path(self):\n195:    def test_register_duplicate_path(self):\n224:    def test_only_json_args(self):\n235:    def test_only_df_args(self):\n251:    def test_only_list_args(self):\n261:    def test_no_args(self):\n270:    def test_bytes_args(self):\n284:    def test_mixed_args(self):\n308:    def test_duplicate_key(self):\n315:    def test_key_sent_to_frontend(self):\n327:    def test_simple_default(self):\n335:    def test_bytes_default(self):\n347:    def test_df_default(self):\n375:    def test_outside_form(self):\n384:    def test_inside_form(self):\n421:    def test_success_request(self):\n437:    def test_invalid_component_request(self):\n444:    def test_invalid_content_request(self):\n460:    def test_support_binary_files_request(self):\n499:    def test_iframe(self):\n510:    def test_html(self):\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_009",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"get_url\\\" lib/streamlit/components/v1/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_009",
+    "content": "lib/streamlit/components/v1/components.py:356:    def get_url(file_id: str) -> str:\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_010",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"get_url\\\" lib/streamlit/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_010",
+    "content": "lib/streamlit/bootstrap.py:193:        util.open_browser(session_data.get_url(addr))\nlib/streamlit/bootstrap.py:222:            (\"URL\", session_data.get_url(config.get_option(\"browser.serverAddress\")))\nlib/streamlit/bootstrap.py:229:            (\"URL\", session_data.get_url(config.get_option(\"server.address\"))),\nlib/streamlit/bootstrap.py:235:            named_urls.append((\"Network URL\", session_data.get_url(internal_ip)))\nlib/streamlit/bootstrap.py:239:            named_urls.append((\"External URL\", session_data.get_url(external_ip)))\nlib/streamlit/bootstrap.py:243:            (\"Local URL\", session_data.get_url(\"localhost\")),\nlib/streamlit/bootstrap.py:248:            named_urls.append((\"Network URL\", session_data.get_url(internal_ip)))\nlib/streamlit/components/v1/components.py:356:    def get_url(file_id: str) -> str:\nlib/streamlit/server/upload_file_request_handler.py:60:                session_data.get_url(config.get_option(\"browser.serverAddress\")),\nlib/streamlit/session_data.py:29:def get_url(host_ip: str) -> str:\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_011",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"<< 'EOF' > reproduce.py\\nimport tornado.ioloop\\nimport tornado.web\\nimport tornado.testing\\nfrom streamlit.components.v1.components import ComponentRequestHandler, ComponentRegistry, declare_component\\nimport os\\nimport unittest\\nfrom unittest import mock\\n\\nPATH = os.path.abspath(os.path.dirname(__file__))\\n\\nclass ComponentRequestHandlerTest(tornado.testing.AsyncHTTPTestCase):\\n    def tearDown(self) -> None:\\n        ComponentRegistry._instance = None\\n\\n    def get_app(self):\\n        self.registry = ComponentRegistry()\\n        return tornado.web.Application(\\n            [\\n                (\\n                    \\\"/component/(.*)\\\",\\n                    ComponentRequestHandler,\\n                    dict(registry=self.registry.instance()),\\n                )\\n            ]\\n        )\\n\\n    def _request_component(self, path):\\n        return self.fetch(\\\"/component/%s\\\" % path, method=\\\"GET\\\")\\n\\n    def test_success_request(self):\\n        with mock.patch(\\\"streamlit.components.v1.components.os.path.isdir\\\"):\\n            declare_component(\\\"test\\\", path=PATH)\\n\\n        with mock.patch(\\n            \\\"streamlit.components.v1.components.open\\\",\\n            mock.mock_open(read_data=\\\"Test Content\\\"),\\n        ):\\n            response = self._request_component(\\\"reproduce.test\\\")\\n\\n        self.assertEqual(200, response.code)\\n        self.assertEqual(b\\\"Test Content\\\", response.body)\\n\\nif __name__ == \\\"__main__\\\":\\n    unittest.main()\\nEOF\\npython reproduce.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_011",
+    "content": "2026-03-08 05:47:28.849 INFO    matplotlib.font_manager: generated new fontManager\n2026-03-08 05:47:29.263 WARNING streamlit.config: \nWarning: the config option 'server.enableCORS=false' is not compatible with 'server.enableXsrfProtection=true'.\nAs a result, 'server.enableCORS' is being overridden to 'true'.\n\nMore information:\nIn order to protect against CSRF attacks, we send a cookie with each request.\nTo do so, we must specify allowable origins, which places a restriction on\ncross-origin resource sharing.\n\nIf cross origin resource sharing is required, please disable server.enableXsrfProtection.\n            \n2026-03-08 05:47:29.263 DEBUG   streamlit.logger: Initialized tornado logs\n2026-03-08 05:47:29.264 INFO    tornado.access: 200 GET /component/reproduce.test (127.0.0.1) 2.06ms\nF\n======================================================================\nFAIL: test_success_request (__main__.ComponentRequestHandlerTest)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.10/site-packages/tornado/testing.py\", line 268, in _callTestMethod\n    result = method()\n  File \"/project/reproduce.py\", line 41, in test_success_request\n    self.assertEqual(b\"Test Content\", response.body)\nAssertionError: b'Test Content' != b''\n\n----------------------------------------------------------------------\nRan 1 test in 0.105s\n\nFAILED (failures=1)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_012",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c 'payload = b\\\"\\\\x00\\\\x01\\\\x00\\\\x00\\\\x00\\\\x0D\\\\x00\\\\x80\\\"; str(payload, encoding=\\\"utf-8\\\")'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_012",
+    "content": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 7: invalid start byte\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_013",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c 'from unittest import mock; m = mock.mock_open(read_data=\\\"Test Content\\\"); print(repr(m(\\\"file\\\", \\\"rb\\\").read()))'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_013",
+    "content": "'Test Content'\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_014",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.commonpath(['/foo/bar', '/foo/bar_baz/file.txt']))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_014",
+    "content": "/foo\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_015",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"test_missing_file\\\" lib/tests/streamlit/components_test.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_016",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.commonpath(['C:\\\\\\\\foo\\\\\\\\bar', 'c:\\\\\\\\foo\\\\\\\\bar\\\\\\\\index.html']))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_016",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_017",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.commonpath([r'C:\\\\foo\\\\bar', r'c:\\\\foo\\\\bar\\\\index.html']))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_017",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_018",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.commonpath([r'C:\\\\foo\\\\bar', r'c:\\\\foo\\\\bar\\\\index.html']))\\\" 2>&1\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_018",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_019",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"print('hello')\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_019",
+    "content": "hello\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_020",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.commonpath(['C:\\\\\\\\\\\\\\\\foo\\\\\\\\\\\\\\\\bar', 'c:\\\\\\\\\\\\\\\\foo\\\\\\\\\\\\\\\\bar\\\\\\\\\\\\\\\\index.html']))\\\" 2>&1\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_020",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_021",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"<< 'EOF' > test_commonpath.py\\nimport os\\ntry:\\n    print(os.path.commonpath(['C:\\\\\\\\foo\\\\\\\\bar', 'c:\\\\\\\\foo\\\\\\\\bar\\\\\\\\index.html']))\\nexcept Exception as e:\\n    print(e)\\nEOF\\npython test_commonpath.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_021",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_022",
+        "type": "function",
+        "function": {
+          "name": "which",
+          "arguments": "{\"command\": \"python\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_022",
+    "content": "/usr/local/bin/python\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_023",
+        "type": "function",
+        "function": {
+          "name": "/usr/local/bin/python",
+          "arguments": "{\"command\": \"test_commonpath.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_023",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_024",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"test_commonpath.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_024",
+    "content": "import os\ntry:\n    print(os.path.commonpath(['C:\\\\foo\\\\bar', 'c:\\\\foo\\\\bar\\\\index.html']))\nexcept Exception as e:\n    print(e)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_025",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"print('hello')\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_025",
+    "content": "hello\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_026",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.commonpath(['C:\\\\\\\\foo\\\\\\\\bar', 'c:\\\\\\\\foo\\\\\\\\bar\\\\\\\\index.html']))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_026",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_027",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(repr(os.path.commonpath(['C:\\\\\\\\foo\\\\\\\\bar', 'c:\\\\\\\\foo\\\\\\\\bar\\\\\\\\index.html'])))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_027",
+    "content": "''\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_028",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import ntpath; print(repr(ntpath.commonpath(['C:\\\\\\\\foo\\\\\\\\bar', 'c:\\\\\\\\foo\\\\\\\\bar\\\\\\\\index.html'])))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_028",
+    "content": "'C:\\x0coo\\x08ar'\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_029",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(repr(os.path.commonpath(['/foo/bar/', '/foo/bar/index.html'])))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_029",
+    "content": "'/foo/bar'\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_030",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"<< 'EOF' > test_commonpath.py\\nimport os\\nprint(os.path.commonpath(['C:\\\\\\\\foo\\\\\\\\bar', 'c:\\\\\\\\foo\\\\\\\\bar\\\\\\\\index.html']))\\nEOF\\npython test_commonpath.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_030",
+    "content": "\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_031",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.abspath('c:\\\\\\\\foo\\\\\\\\bar'))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_031",
+    "content": "/project/c:\foo\bar\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_032",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"-c \\\"import os; print(os.path.abspath('/foo/bar/'))\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_032",
+    "content": "/foo/bar\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_034",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"commonpath\\\" lib/streamlit/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_035",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"startswith\\\" lib/streamlit/ | grep \\\"abspath\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_035",
+    "content": "grep: lib/streamlit/caching/__pycache__/cache_utils.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/elements/__pycache__/legacy_data_frame.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/elements/__pycache__/doc_string.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/elements/__pycache__/metric.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/elements/__pycache__/image.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/legacy_caching/__pycache__/hashing.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/state/__pycache__/session_state.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/watcher/__pycache__/util.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/__pycache__/config.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/__pycache__/config_util.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/__pycache__/source_util.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/__pycache__/type_util.cpython-310.pyc: binary file matches\ngrep: lib/streamlit/__pycache__/beta_util.cpython-310.pyc: binary file matches\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_036",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"lib/streamlit/server/upload_file_request_handler.py | grep -n -A 10 \\\"def post\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_036",
+    "content": "107:    def post(self, **kwargs):\n108-        \"\"\"Receive an uploaded file and add it to our UploadedFileManager.\n109-        Return the file's ID, so that the client can refer to it.\"\"\"\n110-        args: Dict[str, List[bytes]] = {}\n111-        files: Dict[str, List[Any]] = {}\n112-\n113-        tornado.httputil.parse_body_arguments(\n114-            content_type=self.request.headers[\"Content-Type\"],\n115-            body=self.request.body,\n116-            arguments=args,\n117-            files=files,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_037",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"lib/streamlit/server/server.py | grep -n -A 20 \\\"class AssetsFileHandler\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_038",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"AssetsFileHandler\\\" lib/streamlit/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_038",
+    "content": "lib/streamlit/server/routes.py:95:class AssetsFileHandler(tornado.web.StaticFileHandler):\nlib/streamlit/server/server.py:79:from streamlit.server.routes import AssetsFileHandler\nlib/streamlit/server/server.py:387:                AssetsFileHandler,\ngrep: lib/streamlit/server/__pycache__/routes.cpython-310.pyc: binary file matches\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_039",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"lib/streamlit/server/routes.py | grep -n -A 20 \\\"class AssetsFileHandler\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_039",
+    "content": "95:class AssetsFileHandler(tornado.web.StaticFileHandler):\n96-    # CORS protection should be disabled as we need access\n97-    # to this endpoint from the inner iframe.\n98-    def set_default_headers(self):\n99-        self.set_header(\"Access-Control-Allow-Origin\", \"*\")\n100-\n101-\n102-class AddSlashHandler(tornado.web.RequestHandler):\n103-    @tornado.web.addslash\n104-    def get(self):\n105-        pass\n106-\n107-\n108-class MediaFileHandler(tornado.web.StaticFileHandler):\n109-    def set_default_headers(self):\n110-        if allow_cross_origin_requests():\n111-            self.set_header(\"Access-Control-Allow-Origin\", \"*\")\n112-\n113-    def set_extra_headers(self, path: str) -> None:\n114-        \"\"\"Add Content-Disposition header for downloadable files.\n115-\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_040",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"lib/streamlit/components/v1/components.py   --old_str '    def get(self, path: str) -> None:\\n        pass' --new_str '    def get(self, path: str) -> None:\\n        parts = path.split(\\\"/\\\", 1)\\n        component_name = parts[0]\\n        component_root = self._registry.get_component_path(component_name)\\n        if component_root is None:\\n            self.write(\\\"not found\\\")\\n            self.set_status(404)\\n            return\\n\\n        filename = parts[1] if len(parts) > 1 else \\\"\\\"\\n        if not filename:\\n            filename = \\\"index.html\\\"\\n\\n        abspath = os.path.abspath(os.path.join(component_root, filename))\\n\\n        # Security check: ensure that the resolved path is within the component'\\\"'\\\"'s\\n        # root directory to prevent path traversal attacks.\\n        root = os.path.abspath(component_root)\\n        if not root.endswith(os.path.sep):\\n            root += os.path.sep\\n        if not (abspath + os.path.sep).startswith(root):\\n            self.write(\\\"forbidden\\\")\\n            self.set_status(403)\\n            return\\n\\n        try:\\n            with open(abspath, \\\"rb\\\") as file:\\n                contents = file.read()\\n        except (OSError, IOError):\\n            self.write(\\\"read error\\\")\\n            self.set_status(404)\\n            return\\n\\n        self.set_extra_headers(path)\\n        self.set_header(\\\"Content-Type\\\", self.get_content_type(abspath))\\n        self.write(contents)'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_040",
+    "content": "The path lib/streamlit/components/v1/components.py is not an absolute path, it should start with `/`. Maybe you meant /project/lib/streamlit/components/v1/components.py?\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_041",
+        "type": "function",
+        "function": {
+          "name": "str_replace_editor",
+          "arguments": "{\"command\": \"str_replace\", \"path\": \"/project/lib/streamlit/components/v1/components.py   --old_str '    def get(self, path: str) -> None:\\n        pass' --new_str '    def get(self, path: str) -> None:\\n        parts = path.split(\\\"/\\\", 1)\\n        component_name = parts[0]\\n        component_root = self._registry.get_component_path(component_name)\\n        if component_root is None:\\n            self.write(\\\"not found\\\")\\n            self.set_status(404)\\n            return\\n\\n        filename = parts[1] if len(parts) > 1 else \\\"\\\"\\n        if not filename:\\n            filename = \\\"index.html\\\"\\n\\n        abspath = os.path.abspath(os.path.join(component_root, filename))\\n\\n        # Security check: ensure that the resolved path is within the component'\\\"'\\\"'s\\n        # root directory to prevent path traversal attacks.\\n        root = os.path.abspath(component_root)\\n        if not root.endswith(os.path.sep):\\n            root += os.path.sep\\n        if not (abspath + os.path.sep).startswith(root):\\n            self.write(\\\"forbidden\\\")\\n            self.set_status(403)\\n            return\\n\\n        try:\\n            with open(abspath, \\\"rb\\\") as file:\\n                contents = file.read()\\n        except (OSError, IOError):\\n            self.write(\\\"read error\\\")\\n            self.set_status(404)\\n            return\\n\\n        self.set_extra_headers(path)\\n        self.set_header(\\\"Content-Type\\\", self.get_content_type(abspath))\\n        self.write(contents)'\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_041",
+    "content": "The file /project/lib/streamlit/components/v1/components.py has been edited. Here's the result of running `cat -n` on a snippet of /project/lib/streamlit/components/v1/components.py:\n   305\t\n   306\tclass ComponentRequestHandler(tornado.web.RequestHandler):\n   307\t    def initialize(self, registry: \"ComponentRegistry\"):\n   308\t        self._registry = registry\n   309\t\n   310\t    def get(self, path: str) -> None:\n   311\t        parts = path.split(\"/\", 1)\n   312\t        component_name = parts[0]\n   313\t        component_root = self._registry.get_component_path(component_name)\n   314\t        if component_root is None:\n   315\t            self.write(\"not found\")\n   316\t            self.set_status(404)\n   317\t            return\n   318\t\n   319\t        filename = parts[1] if len(parts) > 1 else \"\"\n   320\t        if not filename:\n   321\t            filename = \"index.html\"\n   322\t\n   323\t        abspath = os.path.abspath(os.path.join(component_root, filename))\n   324\t\n   325\t        # Security check: ensure that the resolved path is within the component's\n   326\t        # root directory to prevent path traversal attacks.\n   327\t        root = os.path.abspath(component_root)\n   328\t        if not root.endswith(os.path.sep):\n   329\t            root += os.path.sep\n   330\t        if not (abspath + os.path.sep).startswith(root):\n   331\t            self.write(\"forbidden\")\n   332\t            self.set_status(403)\n   333\t            return\n   334\t\n   335\t        try:\n   336\t            with open(abspath, \"rb\") as file:\n   337\t                contents = file.read()\n   338\t        except (OSError, IOError):\n   339\t            self.write(\"read error\")\n   340\t            self.set_status(404)\n   341\t            return\n   342\t\n   343\t        self.set_extra_headers(path)\n   344\t        self.set_header(\"Content-Type\", self.get_content_type(abspath))\n   345\t        self.write(contents)\n   346\t\n   347\t    def set_extra_headers(self, path) -> None:\n   348\t        \"\"\"Disable cache for HTML files.\nReview the changes and make sure they are as expected. Edit the file again if necessary.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_042",
+        "type": "function",
+        "function": {
+          "name": "python",
+          "arguments": "{\"command\": \"reproduce.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_042",
+    "content": "2026-03-08 05:54:50.650 WARNING streamlit.config: \nWarning: the config option 'server.enableCORS=false' is not compatible with 'server.enableXsrfProtection=true'.\nAs a result, 'server.enableCORS' is being overridden to 'true'.\n\nMore information:\nIn order to protect against CSRF attacks, we send a cookie with each request.\nTo do so, we must specify allowable origins, which places a restriction on\ncross-origin resource sharing.\n\nIf cross origin resource sharing is required, please disable server.enableXsrfProtection.\n            \n2026-03-08 05:54:50.651 DEBUG   streamlit.logger: Initialized tornado logs\n2026-03-08 05:54:50.654 INFO    tornado.access: 200 GET /component/reproduce.test (127.0.0.1) 4.99ms\n.\n----------------------------------------------------------------------\nRan 1 test in 0.070s\n\nOK\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_043",
+        "type": "function",
+        "function": {
+          "name": "pytest",
+          "arguments": "{\"command\": \"lib/tests/streamlit/components_test.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_043",
+    "content": "============================= test session starts ==============================\nplatform linux -- Python 3.10.18, pytest-8.4.2, pluggy-1.6.0\nrootdir: /project/lib\nplugins: hypothesis-6.142.1, cov-7.0.0, requests-mock-1.12.1\ncollecting ... \rcollected 28 items                                                             \n\nlib/tests/streamlit/components_test.py ............................      [100%]\n\n============================== 28 passed in 0.72s ==============================\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_044",
+        "type": "function",
+        "function": {
+          "name": "grep",
+          "arguments": "{\"command\": \"-rn \\\"set_extra_headers\\\" lib/streamlit/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_044",
+    "content": "lib/streamlit/components/v1/components.py:343:        self.set_extra_headers(path)\nlib/streamlit/components/v1/components.py:347:    def set_extra_headers(self, path) -> None:\ngrep: lib/streamlit/components/v1/__pycache__/components.cpython-310.pyc: binary file matches\nlib/streamlit/server/routes.py:51:    def set_extra_headers(self, path):\nlib/streamlit/server/routes.py:113:    def set_extra_headers(self, path: str) -> None:\ngrep: lib/streamlit/server/__pycache__/routes.cpython-310.pyc: binary file matches\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_045",
+        "type": "function",
+        "function": {
+          "name": "cat",
+          "arguments": "{\"command\": \"lib/streamlit/server/routes.py | grep -n -A 10 \\\"def set_extra_headers\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_045",
+    "content": "51:    def set_extra_headers(self, path):\n52-        \"\"\"Disable cache for HTML files.\n53-\n54-        Other assets like JS and CSS are suffixed with their hash, so they can\n55-        be cached indefinitely.\n56-        \"\"\"\n57-        is_index_url = len(path) == 0\n58-\n59-        if is_index_url or path.endswith(\".html\"):\n60-            self.set_header(\"Cache-Control\", \"no-cache\")\n61-        else:\n--\n113:    def set_extra_headers(self, path: str) -> None:\n114-        \"\"\"Add Content-Disposition header for downloadable files.\n115-\n116-        Set header value to \"attachment\" indicating that file should be saved\n117-        locally instead of displaying inline in browser.\n118-\n119-        We also set filename to specify filename for  downloaded file.\n120-        Used for serve downloadable files, like files stored\n121-        via st.download_button widget\n122-        \"\"\"\n123-        in_memory_file = in_memory_file_manager.get(path)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_046",
+        "type": "function",
+        "function": {
+          "name": "submit",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_046",
+    "content": "Thank you for your work on this issue. Please carefully follow the steps below to help review your changes.\n\n1. If you made any changes to your code after running the reproduction script, please run the reproduction script again.\n  If the reproduction script is failing, please revisit your changes and make sure they are correct.\n  If you have already removed your reproduction script, please ignore this step.\n2. Remove your reproduction script (if you haven't done so already).\n3. If you have modified any TEST files, please revert them to the state they had before you started fixing the issue.\n  You can do this with `git checkout -- /path/to/test/file.py`. Use below <diff> to find the files you need to revert.\n4. Run the submit command again to confirm.\n\nHere is a list of all of your changes:\n\n<diff>\ndiff --git a/lib/streamlit/components/v1/components.py b/lib/streamlit/components/v1/components.py\nindex b2c6e84e3..802c54b04 100644\n--- a/lib/streamlit/components/v1/components.py\n+++ b/lib/streamlit/components/v1/components.py\n@@ -308,7 +308,41 @@ class ComponentRequestHandler(tornado.web.RequestHandler):\n         self._registry = registry\n \n     def get(self, path: str) -> None:\n-        pass\n+        parts = path.split(\"/\", 1)\n+        component_name = parts[0]\n+        component_root = self._registry.get_component_path(component_name)\n+        if component_root is None:\n+            self.write(\"not found\")\n+            self.set_status(404)\n+            return\n+\n+        filename = parts[1] if len(parts) > 1 else \"\"\n+        if not filename:\n+            filename = \"index.html\"\n+\n+        abspath = os.path.abspath(os.path.join(component_root, filename))\n+\n+        # Security check: ensure that the resolved path is within the component's\n+        # root directory to prevent path traversal attacks.\n+        root = os.path.abspath(component_root)\n+        if not root.endswith(os.path.sep):\n+            root += os.path.sep\n+        if not (abspath + os.path.sep).startswith(root):\n+            self.write(\"forbidden\")\n+            self.set_status(403)\n+            return\n+\n+        try:\n+            with open(abspath, \"rb\") as file:\n+                contents = file.read()\n+        except (OSError, IOError):\n+            self.write(\"read error\")\n+            self.set_status(404)\n+            return\n+\n+        self.set_extra_headers(path)\n+        self.set_header(\"Content-Type\", self.get_content_type(abspath))\n+        self.write(contents)\n \n     def set_extra_headers(self, path) -> None:\n         \"\"\"Disable cache for HTML files.\ndiff --git a/reproduce.py b/reproduce.py\nnew file mode 100644\nindex 000000000..e3fa6c08f\n--- /dev/null\n+++ b/reproduce.py\n@@ -0,0 +1,44 @@\n+import tornado.ioloop\n+import tornado.web\n+import tornado.testing\n+from streamlit.components.v1.components import ComponentRequestHandler, ComponentRegistry, declare_component\n+import os\n+import unittest\n+from unittest import mock\n+\n+PATH = os.path.abspath(os.path.dirname(__file__))\n+\n+class ComponentRequestHandlerTest(tornado.testing.AsyncHTTPTestCase):\n+    def tearDown(self) -> None:\n+        ComponentRegistry._instance = None\n+\n+    def get_app(self):\n+        self.registry = ComponentRegistry()\n+        return tornado.web.Application(\n+            [\n+                (\n+                    \"/component/(.*)\",\n+                    ComponentRequestHandler,\n+                    dict(registry=self.registry.instance()),\n+                )\n+            ]\n+        )\n+\n+    def _request_component(self, path):\n+        return self.fetch(\"/component/%s\" % path, method=\"GET\")\n+\n+    def test_success_request(self):\n+        with mock.patch(\"streamlit.components.v1.components.os.path.isdir\"):\n+            declare_component(\"test\", path=PATH)\n+\n+        with mock.patch(\n+            \"streamlit.components.v1.components.open\",\n+            mock.mock_open(read_data=\"Test Content\"),\n+        ):\n+            response = self._request_component(\"reproduce.test\")\n+\n+        self.assertEqual(200, response.code)\n+        self.assertEqual(b\"Test Content\", response.body)\n+\n+if __name__ == \"__main__\":\n+    unittest.main()\ndiff --git a/test_commonpath.py b/test_commonpath.py\nnew file mode 100644\nindex 000000000..8c3894df4\n--- /dev/null\n+++ b/test_commonpath.py\n@@ -0,0 +1,2 @@\n+import os\n+print(os.path.commonpath(['C:\\\\foo\\\\bar', 'c:\\\\foo\\\\bar\\\\index.html']))\n\n</diff>\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_047",
+        "type": "function",
+        "function": {
+          "name": "rm",
+          "arguments": "{\"command\": \"reproduce.py test_commonpath.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "toolu_048",
+        "type": "function",
+        "function": {
+          "name": "submit",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "toolu_048",
+    "content": "diff --git a/lib/streamlit/components/v1/components.py b/lib/streamlit/components/v1/components.py\nindex b2c6e84e3..802c54b04 100644\n--- a/lib/streamlit/components/v1/components.py\n+++ b/lib/streamlit/components/v1/components.py\n@@ -308,7 +308,41 @@ class ComponentRequestHandler(tornado.web.RequestHandler):\n         self._registry = registry\n \n     def get(self, path: str) -> None:\n-        pass\n+        parts = path.split(\"/\", 1)\n+        component_name = parts[0]\n+        component_root = self._registry.get_component_path(component_name)\n+        if component_root is None:\n+            self.write(\"not found\")\n+            self.set_status(404)\n+            return\n+\n+        filename = parts[1] if len(parts) > 1 else \"\"\n+        if not filename:\n+            filename = \"index.html\"\n+\n+        abspath = os.path.abspath(os.path.join(component_root, filename))\n+\n+        # Security check: ensure that the resolved path is within the component's\n+        # root directory to prevent path traversal attacks.\n+        root = os.path.abspath(component_root)\n+        if not root.endswith(os.path.sep):\n+            root += os.path.sep\n+        if not (abspath + os.path.sep).startswith(root):\n+            self.write(\"forbidden\")\n+            self.set_status(403)\n+            return\n+\n+        try:\n+            with open(abspath, \"rb\") as file:\n+                contents = file.read()\n+        except (OSError, IOError):\n+            self.write(\"read error\")\n+            self.set_status(404)\n+            return\n+\n+        self.set_extra_headers(path)\n+        self.set_header(\"Content-Type\", self.get_content_type(abspath))\n+        self.write(contents)\n \n     def set_extra_headers(self, path) -> None:\n         \"\"\"Disable cache for HTML files.\n"
+  }
+]
