@@ -214,7 +214,7 @@ function App() {
                             </div>
                             <div className="news-arrow">→</div>
                           </a>
-                          <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="news-item">
+                          <a href="https://openreview.net/pdf?id=qG8g00zRZa" target="_blank" rel="noopener noreferrer" className="news-item">
                             <div className="news-icon">📝</div>
                             <div className="news-text">
                               <strong>Is Vibe Coding Safe? Benchmarking Vulnerability of Agent-Generated Code in Real-World Tasks</strong>
@@ -280,7 +280,7 @@ function App() {
                 Nerfies
               </a>{' '}
               template. Blog content adapted from the{' '}
-              <a href="https://arxiv.org/abs/2512.03262" target="_blank" rel="noopener noreferrer" className="footer-email">
+              <a href="https://openreview.net/pdf?id=qG8g00zRZa" target="_blank" rel="noopener noreferrer" className="footer-email">
                 SusVibes paper
               </a>
               .
