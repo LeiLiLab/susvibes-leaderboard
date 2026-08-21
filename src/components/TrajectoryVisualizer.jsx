@@ -1,10 +1,152 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
+import remarkGfm from 'remark-gfm'
 import './TrajectoryVisualizer.css'
 import PillSelect from './PillSelect'
 import VersionInfo from './VersionInfo'
 import { sortVersionsDesc } from '../utils/version'
+import { getLatestSubmissionDate } from '../utils/submissionDate'
+import { loadDatasetMetadata, loadFullDataset } from '../utils/datasets'
+import { loadSubmissionEntries } from '../utils/submissions'
+
+const ITEMS_PER_BATCH = 20
+
+const LoadMoreButton = ({ visibleCount, totalCount, itemLabel, onLoadMore }) => {
+  if (visibleCount >= totalCount) return null
+
+  const nextCount = Math.min(ITEMS_PER_BATCH, totalCount - visibleCount)
+  return (
+    <div className="load-more-container">
+      <span className="load-more-count">
+        Showing {visibleCount} of {totalCount} {itemLabel}
+      </span>
+      <button className="load-more-button" onClick={onLoadMore}>
+        Load {nextCount} more
+      </button>
+    </div>
+  )
+}
+
+const parseToolArguments = toolCall => {
+  const rawArguments = toolCall?.function?.arguments ??
+    toolCall?.arguments ??
+    toolCall?.input ??
+    {}
+
+  if (typeof rawArguments !== 'string') return rawArguments
+
+  try {
+    return JSON.parse(rawArguments)
+  } catch {
+    return rawArguments
+  }
+}
+
+const formatArgumentLabel = key => (
+  key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, character => character.toUpperCase())
+)
+
+const formatArgumentValue = value => {
+  if (typeof value === 'string') return value
+  if (value == null) return String(value)
+  return JSON.stringify(value, null, 2)
+}
+
+const getToolCallName = toolCall => (
+  toolCall?.function?.name ||
+  toolCall?.name ||
+  toolCall?.tool_name ||
+  'Unknown tool'
+)
+
+const ToolCallArguments = ({ toolCall }) => {
+  const name = getToolCallName(toolCall)
+  const parsedArguments = parseToolArguments(toolCall)
+  const argumentEntries = (
+    parsedArguments &&
+    typeof parsedArguments === 'object' &&
+    !Array.isArray(parsedArguments)
+  )
+    ? Object.entries(parsedArguments)
+    : [['arguments', parsedArguments]]
+
+  return (
+    <dl className="tool-call-arguments" aria-label={`Arguments for ${name}`}>
+      {argumentEntries.map(([key, value]) => {
+        const formattedValue = formatArgumentValue(value)
+        const isBlockValue = (
+          typeof value !== 'string' ||
+          formattedValue.includes('\n') ||
+          formattedValue.length > 72 ||
+          ['command', 'patch', 'old_str', 'new_str'].includes(key)
+        )
+
+        return (
+          <div className="tool-call-argument" key={key}>
+            <dt>{formatArgumentLabel(key)}</dt>
+            <dd>
+              {isBlockValue
+                ? <pre>{formattedValue}</pre>
+                : <code>{formattedValue}</code>}
+            </dd>
+          </div>
+        )
+      })}
+    </dl>
+  )
+}
+
+const MarkdownContent = ({ content }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm, remarkBreaks]}
+    components={{
+      a: props => (
+        <a {...props} target="_blank" rel="noopener noreferrer" />
+      )
+    }}
+  >
+    {content}
+  </ReactMarkdown>
+)
+
+const MessageSummary = ({ message }) => {
+  const toolNames = [...new Set(
+    (message.tool_calls || []).map(getToolCallName)
+  )]
+
+  if (message.role === 'assistant' && toolNames.length > 0) {
+    return (
+      <>
+        <span className="message-summary-role">Assistant</span>
+        <span className="message-summary-label">Tool calls:</span>
+        <span className="message-summary-tools">
+          {toolNames.map(name => <code key={name}>{name}</code>)}
+        </span>
+      </>
+    )
+  }
+
+  const labels = {
+    assistant: ['Assistant', 'Response'],
+    tool: ['Tool output', null],
+    system: ['System', 'Prompt'],
+    user: ['User', 'Message']
+  }
+  const [roleLabel, typeLabel] = labels[message.role] || [message.role, 'Message']
+
+  return (
+    <>
+      <span className="message-summary-role">{roleLabel}</span>
+      {typeLabel && <span className="message-summary-label">{typeLabel}</span>}
+    </>
+  )
+}
 
 const TrajectoryVisualizer = () => {
+  const contentRef = useRef(null)
   const [selectedTrajectory, setSelectedTrajectory] = useState(null)
   const [selectedTask, setSelectedTask] = useState(null)
   const [selectedFile, setSelectedFile] = useState(null)
@@ -24,6 +166,10 @@ const TrajectoryVisualizer = () => {
   const [selectedSubmission, setSelectedSubmission] = useState(null)
   const [availableTrajectories, setAvailableTrajectories] = useState([])
   const [submissionsLoading, setSubmissionsLoading] = useState(false)
+  const [visibleSubmissionCount, setVisibleSubmissionCount] = useState(ITEMS_PER_BATCH)
+  const [visibleTaskCount, setVisibleTaskCount] = useState(ITEMS_PER_BATCH)
+  const [visibleTrialCount, setVisibleTrialCount] = useState(ITEMS_PER_BATCH)
+  const [splitTrajectoryState, setSplitTrajectoryState] = useState(null)
 
   // Dataset versions present in the submissions, newest first; selection falls back to latest.
   const availableVersions = useMemo(
@@ -31,23 +177,24 @@ const TrajectoryVisualizer = () => {
     [submissions]
   )
   const effectiveVersion = datasetVersion ?? availableVersions[0] ?? 'v1.0'
-
-  // Each dataset version has its own file (v0.0 and v1.0 are different task sets).
-  const datasetUrl = (version) => `${import.meta.env.BASE_URL}datasets/susvibes_dataset_${version}.jsonl`
+  const versionSubmissions = useMemo(
+    () => submissions.filter(
+      submission => (
+        (submission.methodology?.susvibes_version || 'v1.0') === effectiveVersion &&
+        submission.hasTrajectories
+      )
+    ),
+    [submissions, effectiveVersion]
+  )
 
   // State for dataset information lookup
   const [datasetInfo, setDatasetInfo] = useState(new Map())
   
-  // State for summary information (correct/correct_secure)
-  const [summaryInfo, setSummaryInfo] = useState(null)
-  
-  // State for simulation grid pagination
-  const [simulationsPerPage, setSimulationsPerPage] = useState(50)
-  const [simulationPage, setSimulationPage] = useState(1)
-
   // State for message pagination
-  const [messagesPerPage, setMessagesPerPage] = useState(50)
+  const [messagesPerPage, setMessagesPerPage] = useState(25)
   const [currentPage, setCurrentPage] = useState(1)
+  const [expandedMessages, setExpandedMessages] = useState(new Set())
+  const [allMessagesExpanded, setAllMessagesExpanded] = useState(false)
 
   // Helper function to create composite key from agent framework and model name
   const createAgentName = (agentFramework, modelName) => {
@@ -55,13 +202,15 @@ const TrajectoryVisualizer = () => {
     return `${modelName}::${framework}`
   }
 
-
-  // Check if a submission has any trajectory files
-  const checkSubmissionHasTrajectories = async (submission) => {
-    // Use the declared trajectories_available field from the submission
-    // This is much more reliable than trying to guess file patterns
-    return submission.trajectories_available === true
+  const scrollToContent = () => {
+    requestAnimationFrame(() => {
+      contentRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      })
+    })
   }
+
 
   // Load submissions data from the manifest
   const loadSubmissions = async () => {
@@ -69,47 +218,21 @@ const TrajectoryVisualizer = () => {
       setSubmissionsLoading(true)
       setError(null)
       
-      // Load the manifest file to get list of submissions
-      const manifestResponse = await fetch(`${import.meta.env.BASE_URL}submissions/manifest.json`)
-      if (!manifestResponse.ok) {
-        throw new Error('Failed to load submissions manifest')
-      }
+      const loadedSubmissions = (
+        await loadSubmissionEntries(import.meta.env.BASE_URL)
+      ).map(submission => ({
+        ...submission,
+        hasTrajectories: submission.trajectories_available === true
+      }))
       
-      const manifest = await manifestResponse.json()
-      const submissionDirs = manifest.submissions || []
-      
-      const loadedSubmissions = []
-      
-      // Load each submission from its directory
-      for (const submissionDir of submissionDirs) {
-        try {
-          const response = await fetch(`${import.meta.env.BASE_URL}submissions/${submissionDir}/submission.json`)
-          if (!response.ok) {
-            console.warn(`Failed to load ${submissionDir}: ${response.status}`)
-            continue
-          }
-          
-          const submission = await response.json()
-          
-          // Check if this submission has any trajectory files
-          const hasTrajectories = await checkSubmissionHasTrajectories({
-            ...submission,
-            submissionDir
-          })
-          
-          // Store submission data with directory info and trajectory availability
-          loadedSubmissions.push({
-            ...submission,
-            submissionDir, // Include directory name for trajectory access
-            hasTrajectories // Flag indicating if trajectories are available
-          })
-        } catch (error) {
-          console.warn(`Error loading ${submissionDir}:`, error)
-        }
-      }
-      
+      const latestSubmissionDate = getLatestSubmissionDate(loadedSubmissions)
+      const normalizedSubmissions = loadedSubmissions.map(submission => ({
+        ...submission,
+        is_new: submission.submission_date === latestSubmissionDate
+      }))
+
       // Sort submissions: new first, then those with trajectories, then alphabetically
-      const sortedSubmissions = loadedSubmissions.sort((a, b) => {
+      const sortedSubmissions = normalizedSubmissions.sort((a, b) => {
         // New submissions come first
         if (a.is_new !== b.is_new) {
           return (b.is_new ? 1 : 0) - (a.is_new ? 1 : 0)
@@ -244,32 +367,15 @@ const TrajectoryVisualizer = () => {
   // Load dataset information
   const loadDatasetInfo = async () => {
     try {
-      const response = await fetch(datasetUrl(effectiveVersion))
-      if (!response.ok) {
-        console.warn('Failed to load dataset info')
-        return
-      }
-      
-      const text = await response.text()
-      const lines = text.trim().split('\n').filter(line => line.trim())
+      const instances = await loadDatasetMetadata(
+        import.meta.env.BASE_URL,
+        effectiveVersion
+      )
       const infoMap = new Map()
       
-      lines.forEach(line => {
-        try {
-          const instance = JSON.parse(line)
-          if (instance.instance_id) {
-            infoMap.set(instance.instance_id, {
-              instance_id: instance.instance_id,
-              image_name: instance.image_name || null,
-              project: instance.project || null,
-              cwe_ids: instance.cwe_ids || [],
-              cve_id: instance.cve_id || null,
-              info_page: instance.info_page || null,
-              problem_statement: instance.problem_statement || null
-            })
-          }
-        } catch (err) {
-          console.warn('Failed to parse dataset line:', err)
+      instances.forEach(instance => {
+        if (instance.instance_id) {
+          infoMap.set(instance.instance_id, instance)
         }
       })
       
@@ -285,6 +391,15 @@ const TrajectoryVisualizer = () => {
       loadSubmissions()
     }
   }, [viewMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setVisibleSubmissionCount(ITEMS_PER_BATCH)
+  }, [effectiveVersion])
+
+  useEffect(() => {
+    setExpandedMessages(new Set())
+    setAllMessagesExpanded(false)
+  }, [selectedTask, currentPage, messagesPerPage])
 
   // Instance-info lookup depends on the dataset version (v0.0 / v1.0 differ).
   useEffect(() => {
@@ -366,7 +481,7 @@ const TrajectoryVisualizer = () => {
           }
 
           // Optional display metadata (preserved as extra keys by the converter)
-          const usage = m.usage || {}
+          const usage = m.usage
           const cost = m.cost || 0
           totalCost += cost
 
@@ -382,18 +497,27 @@ const TrajectoryVisualizer = () => {
           }
 
           const toolCalls = Array.isArray(m.tool_calls) ? m.tool_calls : []
+          const promptTokens = usage?.prompt_tokens ?? usage?.input_tokens
+          const completionTokens = usage?.completion_tokens ?? usage?.output_tokens
+          const normalizedUsage = (
+            Number.isFinite(promptTokens) ||
+            Number.isFinite(completionTokens)
+          ) && ((promptTokens || 0) > 0 || (completionTokens || 0) > 0)
+            ? {
+                prompt_tokens: Number.isFinite(promptTokens) ? promptTokens : 0,
+                completion_tokens: Number.isFinite(completionTokens) ? completionTokens : 0
+              }
+            : undefined
 
           messages.push({
             role,
             content,
             tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+            tool_call_id: m.tool_call_id,
             turn_idx: turnIdx++,
             timestamp: ts,
             cost,
-            usage: {
-              prompt_tokens: usage.prompt_tokens || usage.input_tokens || 0,
-              completion_tokens: usage.completion_tokens || usage.output_tokens || 0
-            }
+            usage: normalizedUsage
           })
         })
 
@@ -449,6 +573,28 @@ const TrajectoryVisualizer = () => {
     return rawData
   }
 
+  const loadTrajectoryMessages = async (items, basePath) => (
+    Promise.all(items.map(async item => {
+      if (typeof item.messages !== 'string') return item
+
+      try {
+        const response = await fetch(`${basePath}/${item.messages}`)
+        if (!response.ok) {
+          console.warn(`Failed to load messages file: ${item.messages}`)
+          return { ...item, messages: [] }
+        }
+
+        return {
+          ...item,
+          messages: await response.json()
+        }
+      } catch (err) {
+        console.warn(`Error loading messages file ${item.messages}:`, err)
+        return { ...item, messages: [] }
+      }
+    }))
+  )
+
   const loadTrajectoryData = async (trajectoryInfo) => {
     try {
       setLoading(true)
@@ -473,46 +619,34 @@ const TrajectoryVisualizer = () => {
 
       let rawData = await trajectoryResponse.json()
 
-      // Check if message data is stored in separate files (split format)
-      // In split format, each item's `messages` field is a path string instead of an array
-      if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0].messages === 'string') {
-        // Load messages data from separate files
-        const loadedData = await Promise.all(
-          rawData.map(async (item) => {
-            if (typeof item.messages === 'string') {
-              try {
-                // messages is a relative path
-                const messagesFilePath = `${basePath}/${item.messages}`
-                const response = await fetch(messagesFilePath)
-                if (response.ok) {
-                  const messagesData = await response.json()
-                  return { ...item, messages: messagesData }
-                } else {
-                  console.warn(`Failed to load messages file: ${item.messages}`)
-                  return { ...item, messages: [] }
-                }
-              } catch (err) {
-                console.warn(`Error loading messages file ${item.messages}:`, err)
-                return { ...item, messages: [] }
-              }
-            }
-            return item
-          })
-        )
-        rawData = loadedData
-      }
-
       // Load summary data if available
       let summaryData = null
       if (summaryResponse && summaryResponse.ok) {
         try {
           summaryData = await summaryResponse.json()
-          setSummaryInfo(summaryData)
         } catch (err) {
           console.warn('Failed to parse summary file:', err)
         }
+      }
+
+      // Check if message data is stored in separate files (split format)
+      // In split format, each item's `messages` field is a path string instead of an array
+      if (Array.isArray(rawData) && rawData.length > 0 && typeof rawData[0].messages === 'string') {
+        const allItems = rawData
+        const loadedItems = await loadTrajectoryMessages(
+          allItems.slice(0, ITEMS_PER_BATCH),
+          basePath
+        )
+        setSplitTrajectoryState({
+          allItems,
+          loadedItems,
+          basePath,
+          summaryData,
+          model: trajectoryInfo.model
+        })
+        rawData = loadedItems
       } else {
-        setSummaryInfo(null)
+        setSplitTrajectoryState(null)
       }
       
       // Transform the data to match the expected format, passing dataset info and summary info
@@ -521,7 +655,7 @@ const TrajectoryVisualizer = () => {
       setSelectedTrajectory(transformedData)
       setSelectedTask(null)
       setSelectedFile(trajectoryInfo.file)
-      setSimulationPage(1)
+      setVisibleTrialCount(ITEMS_PER_BATCH)
       
     } catch (err) {
       setError(`Error loading trajectory: ${err.message}`)
@@ -531,63 +665,101 @@ const TrajectoryVisualizer = () => {
     }
   }
 
+  const loadMoreTrials = async () => {
+    const totalTrials = splitTrajectoryState?.allItems.length ||
+      selectedTrajectory?.simulations?.length ||
+      0
+    const nextVisibleCount = Math.min(
+      visibleTrialCount + ITEMS_PER_BATCH,
+      totalTrials
+    )
+
+    if (
+      splitTrajectoryState &&
+      nextVisibleCount > splitTrajectoryState.loadedItems.length
+    ) {
+      try {
+        setLoading(true)
+        setError(null)
+
+        const nextItems = splitTrajectoryState.allItems.slice(
+          splitTrajectoryState.loadedItems.length,
+          nextVisibleCount
+        )
+        const newlyLoadedItems = await loadTrajectoryMessages(
+          nextItems,
+          splitTrajectoryState.basePath
+        )
+        const loadedItems = [
+          ...splitTrajectoryState.loadedItems,
+          ...newlyLoadedItems
+        ]
+        const nextState = {
+          ...splitTrajectoryState,
+          loadedItems
+        }
+
+        setSplitTrajectoryState(nextState)
+        setSelectedTrajectory(transformTrajectoryData(
+          loadedItems,
+          datasetInfo,
+          nextState.summaryData,
+          nextState.model
+        ))
+      } catch (err) {
+        setError(`Error loading more trials: ${err.message}`)
+        console.error('Error loading more trials:', err)
+        return
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    setVisibleTrialCount(nextVisibleCount)
+  }
+
   const loadTaskData = async (domain) => {
     try {
       setLoading(true)
       setError(null)
       
-      // Load instances from the dataset file
-      const datasetResponse = await fetch(datasetUrl(effectiveVersion))
-      
-      if (!datasetResponse.ok) {
-        throw new Error(`Failed to load dataset: ${datasetResponse.statusText}`)
-      }
-      
-      const text = await datasetResponse.text()
-      const lines = text.trim().split('\n').filter(line => line.trim())
-      const instances = []
-      
-      lines.forEach(line => {
-        try {
-          const instance = JSON.parse(line)
-          // Convert instance to task-like format for display
-          instances.push({
-            id: instance.instance_id || instance.id,
-            description: {
-              InstanceID: instance.instance_id,
-              image_name: instance.image_name,
-              project: instance.project,
-              cwe_ids: instance.cwe_ids || [],
-              cve_id: instance.cve_id,
-              info_page: instance.info_page,
-              problem_statement: instance.problem_statement
-            },
-            user_scenario: {
-              instructions: {
-                domain: instance.language || 'Python',
-                reason_for_call: 'Code generation task',
-                known_info: `Project: ${instance.project || 'N/A'}`
-              }
-            },
-            evaluation_criteria: {
-              actions: [],
-              nl_assertions: [],
-              env_assertions: []
-            },
-            initial_state: {
-              initialization_actions: []
-            },
-            // Store full instance data for detail view
-            _instanceData: instance
-          })
-        } catch (err) {
-          console.warn('Failed to parse dataset line:', err)
-        }
-      })
+      const metadata = await loadDatasetMetadata(
+        import.meta.env.BASE_URL,
+        effectiveVersion
+      )
+      const instances = metadata.map(instance => ({
+        id: instance.instance_id,
+        description: {
+          InstanceID: instance.instance_id,
+          image_name: instance.image_name,
+          project: instance.project,
+          cwe_ids: instance.cwe_ids || [],
+          cve_id: instance.cve_id,
+          info_page: instance.info_page,
+          problem_statement: instance.problem_statement
+        },
+        user_scenario: {
+          instructions: {
+            domain: instance.language || 'Python',
+            reason_for_call: 'Code generation task',
+            known_info: `Project: ${instance.project || 'N/A'}`
+          }
+        },
+        evaluation_criteria: {
+          actions: [],
+          nl_assertions: [],
+          env_assertions: []
+        },
+        initial_state: {
+          initialization_actions: []
+        },
+        _instanceData: instance
+      }))
       
       setTaskData({ tasks: instances, policy: null, domain })
       setSelectedDomain(domain)
       setSelectedTaskDetail(null)
+      setVisibleTaskCount(ITEMS_PER_BATCH)
       
     } catch (err) {
       setError(`Error loading task data: ${err.message}`)
@@ -597,17 +769,65 @@ const TrajectoryVisualizer = () => {
     }
   }
 
+  const loadTaskDetail = async task => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const instances = await loadFullDataset(
+        import.meta.env.BASE_URL,
+        effectiveVersion
+      )
+      const fullInstance = instances.find(instance => (
+        (instance.instance_id || instance.id) === task.id
+      ))
+
+      setSelectedTaskDetail({
+        ...task,
+        _instanceData: fullInstance || task._instanceData
+      })
+      scrollToContent()
+    } catch (err) {
+      setError(`Error loading task detail: ${err.message}`)
+      console.error('Error loading task detail:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const formatMessage = (message) => {
-    const { role, content, tool_calls, turn_idx, timestamp, cost, usage } = message
+    const {
+      role,
+      content,
+      tool_calls,
+      tool_call_id,
+      turn_idx,
+      timestamp,
+      cost,
+      usage
+    } = message
+    const promptTokens = usage?.prompt_tokens ?? usage?.input_tokens
+    const completionTokens = usage?.completion_tokens ?? usage?.output_tokens
+    const hasTokenUsage = (
+      Number.isFinite(promptTokens) ||
+      Number.isFinite(completionTokens)
+    ) && ((promptTokens || 0) > 0 || (completionTokens || 0) > 0)
     
     return {
       role,
       content,
-      tool_calls,
+      tool_calls: Array.isArray(tool_calls)
+        ? tool_calls
+        : tool_calls
+          ? [tool_calls]
+          : undefined,
+      tool_call_id,
       turn: turn_idx,
       timestamp: timestamp ? new Date(timestamp).toLocaleString() : '',
       cost: cost || 0,
-      tokens: usage ? `${usage.prompt_tokens || 0}/${usage.completion_tokens || 0}` : 'N/A'
+      tokens: hasTokenUsage
+        ? `${Number.isFinite(promptTokens) ? promptTokens : 0}/${Number.isFinite(completionTokens) ? completionTokens : 0}`
+        : null
     }
   }
 
@@ -619,7 +839,12 @@ const TrajectoryVisualizer = () => {
     const totalPages = Math.ceil(total / perPage)
     const startIndex = (page - 1) * perPage
     const endIndex = startIndex + perPage
-    const paginatedMessages = allMessages.slice(startIndex, endIndex)
+    const paginatedMessages = allMessages
+      .slice(startIndex, endIndex)
+      .map((message, index) => ({
+        ...message,
+        messageIndex: startIndex + index
+      }))
     
     return {
       messages: paginatedMessages,
@@ -627,6 +852,33 @@ const TrajectoryVisualizer = () => {
       totalPages,
       currentPage: page
     }
+  }
+
+  const toggleMessageExpansion = messageIndex => {
+    if (allMessagesExpanded) {
+      const pageMessages = getDisplayMessages(
+        selectedTask,
+        currentPage,
+        messagesPerPage
+      ).messages
+      setExpandedMessages(new Set(
+        pageMessages
+          .map(message => message.messageIndex)
+          .filter(index => index !== messageIndex)
+      ))
+      setAllMessagesExpanded(false)
+      return
+    }
+
+    setExpandedMessages(current => {
+      const next = new Set(current)
+      if (next.has(messageIndex)) {
+        next.delete(messageIndex)
+      } else {
+        next.add(messageIndex)
+      }
+      return next
+    })
   }
 
   // SWE instance ids look like "<owner>__<repo>_<commit>" (project is "<owner>/<repo>").
@@ -735,21 +987,21 @@ const TrajectoryVisualizer = () => {
                     )}
 
                     {!submissionsLoading && submissions.length > 0 &&
-                      submissions.filter(s => (s.methodology?.susvibes_version || 'v1.0') === effectiveVersion).length === 0 && (
+                      versionSubmissions.length === 0 && (
                       <div className="empty-state">
-                        <p>No {effectiveVersion} submissions yet.</p>
+                        <p>No {effectiveVersion} trajectories available.</p>
                       </div>
                     )}
 
-                    {!submissionsLoading && submissions
-                      .filter(submission => (submission.methodology?.susvibes_version || 'v1.0') === effectiveVersion)
+                    {!submissionsLoading && versionSubmissions
+                      .slice(0, visibleSubmissionCount)
                       .map((submission, index) => {
                       const agentName = createAgentName(submission.methodology?.agent_framework, submission.model_name)
                       return (
                       <div 
                         key={`${submission.submissionDir}-${index}`}
-                        className={`submission-item ${!submission.hasTrajectories ? 'no-trajectories' : ''}`}
-                        onClick={() => submission.hasTrajectories ? loadSubmissionTrajectories(submission) : null}
+                        className="submission-item"
+                        onClick={() => loadSubmissionTrajectories(submission)}
                       >
                         <div className="submission-info">
                           <div className="submission-title">{agentName}</div>
@@ -767,22 +1019,27 @@ const TrajectoryVisualizer = () => {
                                 onClick={(e) => e.stopPropagation()}
                               >{submission.custom_label || 'CUSTOM'}</a>
                             )}
-                            {!submission.hasTrajectories && <span className="no-trajectories-badge">No Trajectories</span>}
                           </div>
-                          {!submission.hasTrajectories && (
-                            <div className="no-trajectories-message">
-                              No trajectory files available for this submission
-                            </div>
-                          )}
-                          {submission.hasTrajectories && (
-                            <div className="has-trajectories-message">
-                              Click to view available trajectory files
-                            </div>
-                          )}
+                          <div className="has-trajectories-message">
+                            Click to view available trajectory files
+                          </div>
                         </div>
                       </div>
                       )
                     })}
+                    {!submissionsLoading && (
+                      <LoadMoreButton
+                        visibleCount={Math.min(
+                          visibleSubmissionCount,
+                          versionSubmissions.length
+                        )}
+                        totalCount={versionSubmissions.length}
+                        itemLabel="submissions"
+                        onLoadMore={() => setVisibleSubmissionCount(
+                          count => count + ITEMS_PER_BATCH
+                        )}
+                      />
+                    )}
                   </>
                 ) : (
                   <>
@@ -851,7 +1108,7 @@ const TrajectoryVisualizer = () => {
           </div>
 
           {/* Main Content Panel */}
-          <div className="trajectory-content">
+          <div className="trajectory-content" ref={contentRef}>
             {loading && (
               <div className="loading-state">
                 <div className="loading-spinner"></div>
@@ -886,131 +1143,85 @@ const TrajectoryVisualizer = () => {
             {viewMode === 'trajectories' && selectedTrajectory && !selectedTask && (
               <div className="task-selection">
                 <h3>Available Trials</h3>
-                <p>This trajectory contains {selectedTrajectory.simulations?.length || 0} trials across {selectedTrajectory.tasks?.length || 0} tasks. Select a trial to view the conversation:</p>
+                <p>
+                  This trajectory contains {
+                    splitTrajectoryState?.allItems.length ||
+                    selectedTrajectory.simulations?.length ||
+                    0
+                  } trials. Select a trial to view the conversation:
+                </p>
                 
                 <div className="task-grid">
-                  {(() => {
-                    const allSimulations = selectedTrajectory.simulations || []
-                    const startIdx = (simulationPage - 1) * simulationsPerPage
-                    const endIdx = startIdx + simulationsPerPage
-                    const pageSimulations = allSimulations.slice(startIdx, endIdx)
-
-                    return pageSimulations.map((simulation, index) => {
+                  {(selectedTrajectory.simulations || [])
+                    .slice(0, visibleTrialCount)
+                    .map((simulation, index) => {
                       const task = selectedTrajectory.tasks?.find(t => t.id === simulation.task_id) || {}
                       const domain = task.user_scenario?.instructions?.domain || 'Unknown'
 
                       return (
                         <div
-                          key={simulation.id || (startIdx + index)}
-                          className="task-card"
+                          key={simulation.id || index}
+                          className="task-card trial-card"
                           onClick={() => {
                             setSelectedTask(simulation)
                             setCurrentPage(1) // Reset pagination when selecting a new task
+                            scrollToContent()
                           }}
                         >
                           <div className="task-header">
                             <span className="task-id">Task {getRepoName(simulation.task_id)} - Trial {simulation.trial}</span>
                             <span className="task-domain" data-domain={domain}>{domain}</span>
                           </div>
-                          <div className="task-description">
-                            <p><strong>Project:</strong> {task.description?.project || 'No project available'}</p>
-                            <p><strong>CWE IDs:</strong> {task.description?.cwe_ids?.join(', ') || 'No CWE IDs available'}</p>
-                            <p><strong>Correct:</strong> {simulation.reward_info?.correct ? '✅ Yes' : '❌ No'}</p>
-                            <p><strong>Correct & Secure:</strong> {simulation.reward_info?.correct_secure ? '✅ Yes' : '❌ No'}</p>
-                            <p><strong>Termination:</strong> {simulation.termination_reason || 'N/A'}</p>
-                            <p><strong>Turns:</strong> {simulation.num_turns != null ? simulation.num_turns : 'N/A'}</p>
+                          <div className="trial-outcome-row">
+                            <span className={`trial-outcome ${
+                              simulation.reward_info?.correct_secure
+                                ? 'secure'
+                                : simulation.reward_info?.correct
+                                  ? 'functional'
+                                  : 'failed'
+                            }`}>
+                              {simulation.reward_info?.correct_secure
+                                ? 'Secure pass'
+                                : simulation.reward_info?.correct
+                                  ? 'Functional pass'
+                                  : 'Failed'}
+                            </span>
+                            <span className="trial-termination">
+                              {simulation.termination_reason || 'Unknown termination'}
+                            </span>
                           </div>
-                          <div className="task-stats">
-                            <span className="message-count">
-                              {simulation.messages?.length || 0} messages
-                            </span>
-                            <span className="duration-count">
-                              {simulation.duration ? `${Math.round(simulation.duration)}s` : 'N/A'}
-                            </span>
+                          <dl className="trial-details">
+                            <div>
+                              <dt>Project</dt>
+                              <dd>{task.description?.project || 'Unknown'}</dd>
+                            </div>
+                            <div>
+                              <dt>Vulnerability</dt>
+                              <dd>{task.description?.cwe_ids?.join(', ') || 'Unknown'}</dd>
+                            </div>
+                          </dl>
+                          <div className="task-stats trial-stats">
+                            <span>{simulation.num_turns != null ? simulation.num_turns : 'N/A'} turns</span>
+                            <span>{simulation.messages?.length || 0} messages</span>
+                            <span>{simulation.duration ? `${Math.round(simulation.duration)}s` : 'Duration N/A'}</span>
                           </div>
                         </div>
                       )
-                    })
-                  })()}
+                    })}
                 </div>
-
-                {/* Simulation grid pagination */}
-                {(selectedTrajectory.simulations?.length || 0) > simulationsPerPage && (() => {
-                  const totalSims = selectedTrajectory.simulations.length
-                  const totalSimPages = Math.ceil(totalSims / simulationsPerPage)
-                  return (
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      marginTop: '2rem',
-                      marginBottom: '1rem',
-                      padding: '1rem',
-                      backgroundColor: '#f5f5f5',
-                      borderRadius: '8px',
-                      border: '1px solid #e0e0e0'
-                    }}>
-                      <PillSelect
-                        label="Per page"
-                        options={[25, 50, 100, 200]}
-                        value={simulationsPerPage}
-                        onChange={(v) => {
-                          setSimulationsPerPage(v)
-                          setSimulationPage(1)
-                        }}
-                      />
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <span style={{ fontSize: '0.9rem', color: '#666' }}>
-                          Showing {(simulationPage - 1) * simulationsPerPage + 1} - {Math.min(simulationPage * simulationsPerPage, totalSims)} of {totalSims} simulations
-                        </span>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                          <button
-                            onClick={() => setSimulationPage(p => Math.max(1, p - 1))}
-                            disabled={simulationPage === 1}
-                            style={{
-                              padding: '0.5rem 1rem',
-                              border: 'none',
-                              borderRadius: '4px',
-                              backgroundColor: simulationPage === 1 ? '#d0d0d0' : '#E0143A',
-                              color: simulationPage === 1 ? '#666' : 'white',
-                              cursor: simulationPage === 1 ? 'not-allowed' : 'pointer',
-                              fontSize: '0.9rem',
-                              fontWeight: '500',
-                              transition: 'background-color 0.2s'
-                            }}
-                          >
-                            Previous
-                          </button>
-                          <span style={{
-                            padding: '0.5rem 1rem',
-                            fontSize: '0.9rem',
-                            color: '#333',
-                            fontWeight: '500'
-                          }}>
-                            Page {simulationPage} of {totalSimPages}
-                          </span>
-                          <button
-                            onClick={() => setSimulationPage(p => Math.min(totalSimPages, p + 1))}
-                            disabled={simulationPage >= totalSimPages}
-                            style={{
-                              padding: '0.5rem 1rem',
-                              border: 'none',
-                              borderRadius: '4px',
-                              backgroundColor: simulationPage >= totalSimPages ? '#d0d0d0' : '#E0143A',
-                              color: simulationPage >= totalSimPages ? '#666' : 'white',
-                              cursor: simulationPage >= totalSimPages ? 'not-allowed' : 'pointer',
-                              fontSize: '0.9rem',
-                              fontWeight: '500',
-                              transition: 'background-color 0.2s'
-                            }}
-                          >
-                            Next
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })()}
+                <LoadMoreButton
+                  visibleCount={Math.min(
+                    visibleTrialCount,
+                    selectedTrajectory.simulations?.length || 0
+                  )}
+                  totalCount={
+                    splitTrajectoryState?.allItems.length ||
+                    selectedTrajectory.simulations?.length ||
+                    0
+                  }
+                  itemLabel="trials"
+                  onLoadMore={loadMoreTrials}
+                />
               </div>
             )}
 
@@ -1021,11 +1232,11 @@ const TrajectoryVisualizer = () => {
                 <p>This domain contains {taskData.tasks?.length || 0} tasks. Select a task to view its details:</p>
                 
                 <div className="task-grid">
-                  {taskData.tasks?.map((task, index) => (
+                  {taskData.tasks?.slice(0, visibleTaskCount).map((task, index) => (
                     <div 
                       key={task.id || index}
                       className="task-card"
-                      onClick={() => setSelectedTaskDetail(task)}
+                      onClick={() => loadTaskDetail(task)}
                     >
                       <div className="task-header">
                         <span className="task-id">Task: {getRepoName(task.description?.InstanceID || task.id)}</span>
@@ -1057,6 +1268,17 @@ const TrajectoryVisualizer = () => {
                     </div>
                   ))}
                 </div>
+                <LoadMoreButton
+                  visibleCount={Math.min(
+                    visibleTaskCount,
+                    taskData.tasks?.length || 0
+                  )}
+                  totalCount={taskData.tasks?.length || 0}
+                  itemLabel="tasks"
+                  onLoadMore={() => setVisibleTaskCount(
+                    count => count + ITEMS_PER_BATCH
+                  )}
+                />
               </div>
             )}
 
@@ -1083,6 +1305,7 @@ const TrajectoryVisualizer = () => {
                     </div>
                   </div>
                   
+                  <div className="conversation-overview">
                   <div className="task-context">
                     <h4>Task Information</h4>
                     {(() => {
@@ -1163,42 +1386,97 @@ const TrajectoryVisualizer = () => {
                       </div>
                     )}
                   </div>
+                  </div>
                 </div>
+
+                {(() => {
+                  const messageData = getDisplayMessages(
+                    selectedTask,
+                    currentPage,
+                    messagesPerPage
+                  )
+                  return (
+                    <div className="conversation-toolbar">
+                      <div>
+                        <h4>Conversation Timeline</h4>
+                        <span>
+                          Messages {messageData.messages[0]?.messageIndex + 1 || 0}-
+                          {messageData.messages.at(-1)?.messageIndex + 1 || 0} of {messageData.total}
+                        </span>
+                      </div>
+                      <button
+                        className="message-view-button"
+                        onClick={() => {
+                          setAllMessagesExpanded(current => !current)
+                          setExpandedMessages(new Set())
+                        }}
+                      >
+                        {allMessagesExpanded ? 'Collapse all' : 'Expand all'}
+                      </button>
+                    </div>
+                  )
+                })()}
 
                 <div className="conversation-messages">
                   {(() => {
                     const messageData = getDisplayMessages(selectedTask, currentPage, messagesPerPage)
-                    return messageData.messages.map((message, index) => (
-                    <div 
-                      key={index}
-                      className={`message ${message.role}`}
-                    >
-                      <div className="message-header">
-                        <span className="message-role">
-                          {message.role === 'assistant' ? '🤖 Assistant' : message.role === 'tool' ? '🔧 Tool Output' : '👤 User'}
-                        </span>
-                        <span className="message-turn">Turn {message.turn}</span>
-                        <span className="message-timestamp">{message.timestamp}</span>
-                        {message.cost > 0 && (
-                          <span className="message-cost">${message.cost.toFixed(4)}</span>
-                        )}
-                        <span className="message-tokens">{message.tokens} tokens</span>
-                      </div>
-                      
-                      {message.content && (
-                        <div className="message-content">
-                          {message.content}
-                        </div>
-                      )}
+                    return messageData.messages.map(message => {
+                      const isExpanded = allMessagesExpanded ||
+                        expandedMessages.has(message.messageIndex)
+                      const messageBodyId = `message-body-${message.messageIndex}`
 
-                      {message.tool_calls && (
-                        <div className="message-tools">
-                          <strong>Tool Calls:</strong>
-                          <pre>{JSON.stringify(message.tool_calls, null, 2)}</pre>
-                        </div>
-                      )}
-                    </div>
-                    ))
+                      return (
+                      <div
+                        key={message.messageIndex}
+                        className={`message ${message.role} ${isExpanded ? 'is-expanded' : ''}`}
+                      >
+                        <button
+                          type="button"
+                          className="message-summary"
+                          onClick={() => toggleMessageExpansion(message.messageIndex)}
+                          aria-expanded={isExpanded}
+                          aria-controls={messageBodyId}
+                        >
+                          <span className="message-summary-main">
+                            <MessageSummary message={message} />
+                          </span>
+                          <div className="message-meta">
+                            <span className="message-turn">Turn {message.turn}</span>
+                            {message.timestamp && (
+                              <span className="message-timestamp">{message.timestamp}</span>
+                            )}
+                            {message.cost > 0 && (
+                              <span className="message-cost">${message.cost.toFixed(4)}</span>
+                            )}
+                            {message.tokens && (
+                              <span className="message-tokens">{message.tokens} tokens</span>
+                            )}
+                          </div>
+                          <span className="message-summary-caret" aria-hidden="true">›</span>
+                        </button>
+
+                        {isExpanded && (
+                          <div
+                            className={`message-body ${message.content ? 'has-markdown' : ''}`}
+                            id={messageBodyId}
+                          >
+                            {message.content && (
+                              <MarkdownContent content={message.content} />
+                            )}
+
+                            {message.tool_calls && (
+                              message.tool_calls.map((toolCall, index) => (
+                                <ToolCallArguments
+                                  key={toolCall.id || `${message.messageIndex}-${index}`}
+                                  toolCall={toolCall}
+                                />
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      )
+                    })
                   })()}
                   
                   {/* Pagination Controls - Moved to end of messages */}
@@ -1446,4 +1724,4 @@ const TrajectoryVisualizer = () => {
   )
 }
 
-export default TrajectoryVisualizer 
+export default TrajectoryVisualizer

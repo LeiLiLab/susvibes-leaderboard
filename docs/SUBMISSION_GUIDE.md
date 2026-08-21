@@ -178,9 +178,9 @@ Your `trajectories/` directory holds two files named after the submission direct
 - **`<DIR>.summary.json`** — the SusVibes eval summary for your run.
 - **`messages/<instance_id>.json`** — one file per trajectory.
 
-**Set `"trajectories_available": true`** in `submission.json` when you include them — the
-leaderboard uses that flag, so leaving it out lands you on ⚠️ Unverified even with the files
-present.
+**Set `"trajectories_available": true`** in `submission.json` when you include them. If the
+complete trajectories are hosted externally, keep that flag `false` and provide their stable URL
+as `methodology.verification.trajectories_url`.
 
 The exact format of both is specified in **[TRAJECTORY_FORMAT.md](TRAJECTORY_FORMAT.md)**. Use the
 **split layout** it recommends — one file per instance under `messages/`, referenced from
@@ -215,7 +215,8 @@ We review each submission for schema compliance, data consistency, and formattin
 
 **Verification status.** The leaderboard automatically shows each submission as ✅ Verified or
 ⚠️ Unverified, computed from the fields you provide. A submission is **Verified** when it:
-- has trajectories (`trajectories_available: true`),
+- has bundled trajectories (`trajectories_available: true`) or a complete external trajectory
+  archive (`methodology.verification.trajectories_url`),
 - omitted no tasks (`methodology.verification.omitted_questions: false`), and
 - for standard submissions, did not modify prompts
   (`methodology.verification.modified_prompts: false`) — custom submissions are exempt from this

@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from 'react'
 import PillSelect from './PillSelect'
 import VersionInfo from './VersionInfo'
 import { sortVersionsDesc } from '../utils/version'
+import { getLatestSubmissionDate } from '../utils/submissionDate'
+import { loadSubmissionEntries } from '../utils/submissions'
 import './Leaderboard.css'
 
 // Colors for different LLM backbones - maximally distinct color palette
@@ -157,6 +159,112 @@ const drawPointShape = (canvas, pointStyle, color = '#C41230') => {
   }
 }
 
+const rectanglesOverlap = (a, b) => (
+  a.x < b.x + b.width + 4 &&
+  a.x + a.width + 4 > b.x &&
+  a.y < b.y + b.height + 4 &&
+  a.y + a.height + 4 > b.y
+)
+
+const modelLabelPlugin = {
+  id: 'modelLabels',
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea } = chart
+    if (!chartArea) return
+
+    const placedLabels = []
+    const labelHeight = 20
+    const pointGap = 8
+
+    ctx.save()
+    ctx.font = '600 11px Inter, system-ui, sans-serif'
+    ctx.textBaseline = 'middle'
+
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      if (!chart.isDatasetVisible(datasetIndex) || !dataset.modelName) return
+
+      const point = chart.getDatasetMeta(datasetIndex).data[0]
+      if (!point) return
+
+      const text = dataset.modelName
+      const labelWidth = Math.ceil(ctx.measureText(text).width) + 10
+      const candidates = [
+        { x: point.x + pointGap, y: point.y - labelHeight - 3 },
+        { x: point.x + pointGap, y: point.y + 3 },
+        { x: point.x - labelWidth - pointGap, y: point.y - labelHeight - 3 },
+        { x: point.x - labelWidth - pointGap, y: point.y + 3 },
+        { x: point.x - labelWidth / 2, y: point.y - labelHeight - pointGap },
+        { x: point.x - labelWidth / 2, y: point.y + pointGap }
+      ].map(candidate => ({
+        ...candidate,
+        width: labelWidth,
+        height: labelHeight
+      }))
+
+      const fitsChart = rect => (
+        rect.x >= chartArea.left &&
+        rect.x + rect.width <= chartArea.right &&
+        rect.y >= chartArea.top &&
+        rect.y + rect.height <= chartArea.bottom
+      )
+
+      let labelRect = candidates.find(rect => (
+        fitsChart(rect) &&
+        !placedLabels.some(placed => rectanglesOverlap(rect, placed))
+      ))
+
+      if (!labelRect) {
+        labelRect = candidates
+          .filter(fitsChart)
+          .sort((a, b) => (
+            placedLabels.filter(placed => rectanglesOverlap(a, placed)).length -
+            placedLabels.filter(placed => rectanglesOverlap(b, placed)).length
+          ))[0]
+      }
+
+      if (!labelRect) {
+        labelRect = {
+          x: Math.min(
+            Math.max(candidates[0].x, chartArea.left),
+            chartArea.right - labelWidth
+          ),
+          y: Math.min(
+            Math.max(candidates[0].y, chartArea.top),
+            chartArea.bottom - labelHeight
+          ),
+          width: labelWidth,
+          height: labelHeight
+        }
+      }
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+      ctx.strokeStyle = dataset.borderColor
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(
+        labelRect.x,
+        labelRect.y,
+        labelRect.width,
+        labelRect.height,
+        4
+      )
+      ctx.fill()
+      ctx.stroke()
+
+      ctx.fillStyle = '#1f2937'
+      ctx.fillText(
+        text,
+        labelRect.x + 5,
+        labelRect.y + labelRect.height / 2
+      )
+
+      placedLabels.push(labelRect)
+    })
+
+    ctx.restore()
+  }
+}
+
 const Leaderboard = () => {
   // Chart state for leaderboard
   const [chartInstance, setChartInstance] = useState(null)
@@ -265,29 +373,15 @@ const Leaderboard = () => {
       setIsLoading(true)
       setLoadError(null)
 
-      // Load the manifest file to get list of submissions from new directory structure
-      const manifestResponse = await fetch(`${import.meta.env.BASE_URL}submissions/manifest.json`)
-      if (!manifestResponse.ok) {
-        throw new Error('Failed to load submissions manifest')
-      }
-
-      const manifest = await manifestResponse.json()
-      const submissionDirs = manifest.submissions || []
-
       const loadedData = {}
       const fullSubmissions = {}
+      const loadedSubmissions = await loadSubmissionEntries(
+        import.meta.env.BASE_URL
+      )
 
-      // Load each submission from its directory
-      for (const submissionDir of submissionDirs) {
+      for (const submission of loadedSubmissions) {
+        const submissionDir = submission.submissionDir
         try {
-          const response = await fetch(`${import.meta.env.BASE_URL}submissions/${submissionDir}/submission.json`)
-          if (!response.ok) {
-            console.warn(`Failed to load ${submissionDir}: ${response.status}`)
-            continue
-          }
-
-          const submission = await response.json()
-
           // Create composite key (agent name) from agent framework, model name, and custom label
           const agentFramework = submission.methodology?.agent_framework || null
           const submissionType = submission.submission_type || 'standard'
@@ -312,7 +406,7 @@ const Leaderboard = () => {
             costs: {
               python: submission.results.python?.cost || null
             },
-            isNew: submission.is_new || false,
+            isNew: false,
             version: submission.methodology?.susvibes_version || 'v1.0',
             agentName: agentName,
             modelName: submission.model_name,
@@ -321,7 +415,8 @@ const Leaderboard = () => {
             // Add verification status
             // For 'custom' submissions, we relax the modified_prompts constraint
             // Custom submissions are allowed to modify prompts as long as they have trajectories and don't omit questions
-            isVerified: submission.trajectories_available &&
+            isVerified: (submission.trajectories_available ||
+              submission.methodology?.verification?.trajectories_url) &&
               submission.methodology?.verification?.omitted_questions === false &&
               (submission.submission_type === 'custom' || submission.methodology?.verification?.modified_prompts === false),
             verificationDetails: submission.methodology?.verification || null,
@@ -339,6 +434,13 @@ const Leaderboard = () => {
           console.warn(`Error loading ${submissionDir}:`, error)
         }
       }
+
+      const latestSubmissionDate = getLatestSubmissionDate(loadedSubmissions)
+      Object.entries(fullSubmissions).forEach(([agentName, submission]) => {
+        const isNew = submission.submission_date === latestSubmissionDate
+        fullSubmissions[agentName].is_new = isNew
+        loadedData[agentName].isNew = isNew
+      })
 
       setPassKData(loadedData)
       setFullSubmissionData(fullSubmissions)
@@ -391,7 +493,9 @@ const Leaderboard = () => {
     if (leaderboardView === 'chart' && !isLoading && Object.keys(passKData).length > 0) {
       // Small delay to ensure DOM is ready
       const timer = setTimeout(() => {
-        initializeChart()
+        initializeChart().catch(error => {
+          console.error('Failed to initialize chart:', error)
+        })
       }, 200)
 
       return () => {
@@ -526,7 +630,7 @@ const Leaderboard = () => {
     return () => document.removeEventListener('click', handleClickOutside)
   }, [showFilterInfo])
 
-  const initializeChart = () => {
+  const initializeChart = async () => {
     const canvas = document.getElementById('passKChart')
     if (!canvas) return
 
@@ -537,6 +641,9 @@ const Leaderboard = () => {
       }
       chartInstance.destroy()
     }
+
+    const { default: Chart } = await import('chart.js/auto')
+    if (!canvas.isConnected) return
 
     const ctx = canvas.getContext('2d')
 
@@ -628,6 +735,7 @@ const Leaderboard = () => {
             }],
             backgroundColor: point.color,
             borderColor: point.color,
+            modelName: point.modelName,
             pointStyle: pointStyle,
             pointRadius: point.isNew ? 8 : 6,
             pointHoverRadius: point.isNew ? 10 : 8,
@@ -693,11 +801,12 @@ const Leaderboard = () => {
     const datasets = createDatasets()
     const axisLimits = calculateAxisLimits(datasets)
 
-    const chart = new window.Chart(ctx, {
+    const chart = new Chart(ctx, {
       type: 'scatter',
       data: {
         datasets: datasets
       },
+      plugins: [modelLabelPlugin],
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -1653,7 +1762,8 @@ const Leaderboard = () => {
                     <h3>Verification Status</h3>
                     <div className="verification-status">
                       <div className="verification-indicator">
-                        {selectedSubmission.trajectories_available &&
+                        {(selectedSubmission.trajectories_available ||
+                          selectedSubmission.methodology.verification.trajectories_url) &&
                           selectedSubmission.methodology.verification.omitted_questions === false &&
                           (selectedSubmission.submission_type === 'custom' || selectedSubmission.methodology.verification.modified_prompts === false) ? (
                           <span className="verified">✅ Verified</span>
@@ -1664,7 +1774,17 @@ const Leaderboard = () => {
                       <div className="detail-grid">
                         <div className="detail-item">
                           <label>Trajectories Available:</label>
-                          <span>{selectedSubmission.trajectories_available ? 'Yes' : 'No'}</span>
+                          <span>
+                            {selectedSubmission.methodology.verification.trajectories_url ? (
+                              <a
+                                href={selectedSubmission.methodology.verification.trajectories_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                Yes (Hugging Face)
+                              </a>
+                            ) : selectedSubmission.trajectories_available ? 'Yes' : 'No'}
+                          </span>
                         </div>
                         <div className="detail-item">
                           <label>Modified Prompts:</label>
@@ -1699,4 +1819,4 @@ const Leaderboard = () => {
   )
 }
 
-export default Leaderboard 
+export default Leaderboard
